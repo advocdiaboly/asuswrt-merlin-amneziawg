@@ -18,7 +18,6 @@
 <script language="JavaScript" type="text/javascript" src="/validator.js"></script>
 <script type="text/javascript" src="/js/httpApi.js"></script>
 <style>
-/* ROG-adaptive color scheme */
 .awg-status {
     padding: 8px 16px;
     border-radius: 4px;
@@ -29,51 +28,40 @@
     text-transform: uppercase;
 }
 .awg-status.running {
-    background: linear-gradient(to bottom, #1a6e2e, #0d4a1a);
-    color: #93E7FF;
+    background: #1a6e2e;
+    color: #fff;
     border: 1px solid #2a8b42;
-    box-shadow: 0 0 8px rgba(147, 231, 255, 0.15);
 }
 .awg-status.stopped {
-    background: linear-gradient(to bottom, #91071f, #5a0414);
+    background: #8b0000;
     color: #fff;
-    border: 1px solid #cf0a2c;
-    box-shadow: 0 0 8px rgba(145, 7, 31, 0.3);
+    border: 1px solid #a00;
 }
 
 .awg-section {
     margin: 14px 0 6px 0;
     font-size: 14px;
     font-weight: bold;
-    color: #93E7FF;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
 .awg-log {
-    background: #192229;
-    color: #93E7FF;
     font-family: "Courier New", "Lucida Console", monospace;
     font-size: 11px;
     padding: 10px;
     height: 180px;
     overflow-y: auto;
-    border: 1px solid #2F3A3E;
+    border: 1px solid #444;
     border-radius: 3px;
     white-space: pre-wrap;
     word-wrap: break-word;
 }
-.awg-log::-webkit-scrollbar { width: 6px; }
-.awg-log::-webkit-scrollbar-track { background: #1F2D35; }
-.awg-log::-webkit-scrollbar-thumb { background: #91071f; border-radius: 3px; }
 
 .awg-btn { margin: 0 4px; }
 
-/* ROG-styled peers table */
 #awg_peers_table { width: 100%; }
 #awg_peers_table thead td {
-    background: linear-gradient(to bottom, #2F3A3E, #232629) !important;
-    color: #93E7FF;
     font-weight: bold;
     text-transform: uppercase;
     font-size: 11px;
@@ -81,59 +69,26 @@
 }
 #awg_peers_table tbody td {
     padding: 6px 8px;
-    border-bottom: 1px solid #2F3A3E;
-    color: #CEC1C7;
     font-size: 12px;
 }
-#awg_peers_table tbody tr:hover td {
-    background: rgba(145, 7, 31, 0.15);
-}
 
-/* ROG accent for form sections */
-.FormTable thead td {
-    border-left: 3px solid #91071f !important;
-}
-
-/* Client list table */
 #awg_client_table { width: 100%; margin-top: 6px; }
-#awg_client_table td { padding: 5px 8px; border-bottom: 1px solid #2F3A3E; }
-#awg_client_table input[type="text"] {
-    background: #1F2D35; border: 1px solid #2F3A3E; color: #CEC1C7;
-    padding: 4px 8px; border-radius: 3px; width: 90%;
-}
-#awg_client_table input[type="text"]:focus { border-color: #91071f; }
+#awg_client_table td { padding: 5px 8px; }
 .awg-remove-btn {
-    background: transparent; border: 1px solid #91071f; color: #cf0a2c;
+    background: transparent; border: 1px solid #a00; color: #c00;
     padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 14px;
 }
-.awg-remove-btn:hover { background: #91071f; color: #fff; }
-.awg-add-btn {
-    background: linear-gradient(to bottom, #2F3A3E, #232629);
-    border: 1px solid #91071f; color: #93E7FF;
-    padding: 5px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;
-}
-.awg-add-btn:hover { border-color: #cf0a2c; }
-/* Import button ROG style */
-.awg-import-btn {
-    background: linear-gradient(to bottom, #91071f, #5a0414);
-    border: 1px solid #cf0a2c;
-    color: #fff;
-    padding: 6px 16px;
-    border-radius: 4px;
+.awg-remove-btn:hover { background: #a00; color: #fff; }
+.awg-add-btn, .awg-import-btn {
     cursor: pointer;
-    font-weight: bold;
     font-size: 12px;
 }
-.awg-import-btn:hover {
-    background: linear-gradient(to bottom, #cf0a2c, #91071f);
-    box-shadow: 0 0 10px rgba(207, 10, 44, 0.3);
-}
 .awg-ac-wrap { position:relative; display:inline-block; width:95%; }
-.awg-ac-list { position:absolute; top:100%; left:0; right:0; max-height:200px; overflow-y:auto; background:#1F2D35; border:1px solid #91071f; border-top:none; z-index:999; display:none; border-radius:0 0 4px 4px; }
-.awg-ac-list div { padding:4px 8px; color:#CEC1C7; cursor:pointer; font-size:12px; }
-.awg-ac-list div:hover, .awg-ac-list div.selected { background:#91071f; color:#fff; }
+.awg-ac-list { position:absolute; top:100%; left:0; right:0; max-height:200px; overflow-y:auto; border:1px solid #444; border-top:none; z-index:999; display:none; border-radius:0 0 4px 4px; }
+.awg-ac-list div { padding:4px 8px; cursor:pointer; font-size:12px; }
+.awg-ac-list div:hover, .awg-ac-list div.selected { background:#666; color:#fff; }
 .awg-ac-list::-webkit-scrollbar { width:5px; }
-.awg-ac-list::-webkit-scrollbar-thumb { background:#91071f; border-radius:3px; }
+.awg-ac-list::-webkit-scrollbar-thumb { background:#888; border-radius:3px; }
 </style>
 <script>
 var custom_settings = <% get_custom_settings(); %>;
@@ -270,9 +225,9 @@ function addClientRow(ip, name, policy){
     var tr = document.createElement('tr');
     policy = policy || 'vpn_all';
     tr.innerHTML =
-        '<td><input type="text" class="client_ip" value="' + ip + '" placeholder="192.168.1.100"></td>' +
-        '<td><input type="text" class="client_name" value="' + name + '" placeholder="iPhone, PS5, TV..."></td>' +
-        '<td><select class="client_policy" onchange="updateGeoVisibility();" style="background:#1F2D35; color:#CEC1C7; border:1px solid #2F3A3E; padding:4px; border-radius:3px; width:100%;">' +
+        '<td><input type="text" class="client_ip input_25_table" value="' + ip + '" placeholder="192.168.1.100"></td>' +
+        '<td><input type="text" class="client_name input_25_table" value="' + name + '" placeholder="iPhone, PS5, TV..."></td>' +
+        '<td><select class="client_policy input_option" onchange="updateGeoVisibility();" style="width:100%;">' +
             '<option value="vpn_all"' + (policy==='vpn_all'?' selected':'') + '>VPN (All)</option>' +
             '<option value="vpn_geo"' + (policy==='vpn_geo'?' selected':'') + '>VPN (Geo)</option>' +
             '<option value="direct"' + (policy==='direct'?' selected':'') + '>Direct</option>' +
@@ -342,7 +297,7 @@ function setCheckedValues(prefix, csv){
 function updateGeoLists(){
     if(!confirm('Force re-download all GeoIP and domain lists?\nThis may take 1-2 minutes.')) return;
     var log = document.getElementById('awg_log');
-    if(log) log.innerHTML = '<span style="color:#93E7FF;">Downloading geo lists... Please wait.</span>';
+    if(log) log.innerHTML = 'Downloading geo lists... Please wait.';
     document.form.action_script.value = "start_awgupdategeo";
     document.form.submit();
     setTimeout(function(){ location.reload(); }, 60000);
@@ -799,11 +754,10 @@ function initAutocompleteIp(){
             <tr><td bgcolor="#4D595D" valign="top">
                 <div>&nbsp;</div>
                 <div class="formfonttitle" style="display:flex; align-items:center; gap:10px;">
-                    <span style="color:#93E7FF; font-size:20px; font-weight:bold; letter-spacing:1px;">AmneziaWG</span>
-                    <span style="color:#CEC1C7; font-size:13px; font-weight:normal;">VPN Client</span>
-                    <span style="margin-left:auto; color:#91071f; font-size:11px; text-transform:uppercase; letter-spacing:1px;">ROG Edition</span>
+                    <span style="font-size:20px; font-weight:bold; letter-spacing:1px;">AmneziaWG</span>
+                    <span style="font-size:13px; font-weight:normal;">VPN Client</span>
                 </div>
-                <div style="margin:10px 0 10px 5px; border-top: 1px solid #91071f;" class="splitLine"></div>
+                <div style="margin:10px 0 10px 5px;" class="splitLine"></div>
 
                 <!-- Status & Actions -->
                 <table width="100%" border="0" cellpadding="4" cellspacing="0">
@@ -842,7 +796,7 @@ function initAutocompleteIp(){
                 <!-- ==================== CONFIG ==================== -->
                 <div class="awg-section">Configuration</div>
                 <div style="margin-bottom:8px;">
-                    <input type="button" class="awg-import-btn" value="Import Config" onclick="importConfig();">
+                    <input type="button" class="button_gen" value="Import Config" onclick="importConfig();">
                     <span style="color:#AAA; margin-left:10px; font-size:12px;">Upload .conf file from Amnezia VPN client</span>
                 </div>
 
@@ -965,8 +919,8 @@ function initAutocompleteIp(){
                 <tr>
                     <th width="35%">Default Policy</th>
                     <td>
-                        <select id="default_policy" onchange="updateGeoVisibility();"
-                                style="background:#1F2D35; color:#93E7FF; border:1px solid #91071f; padding:6px 12px; border-radius:4px; font-size:13px; font-weight:bold;">
+                        <select id="default_policy" class="input_option" onchange="updateGeoVisibility();"
+                                style="font-size:13px; font-weight:bold;">
                             <option value="direct">Direct (no VPN)</option>
                             <option value="vpn_all">VPN — All Traffic</option>
                             <option value="vpn_geo">VPN — Geo Only</option>
@@ -989,14 +943,14 @@ function initAutocompleteIp(){
                 </tbody>
                 </table>
                 <div style="margin-top:6px;">
-                    <button type="button" class="awg-add-btn" onclick="addClientRow('','','vpn_all');">+ Add Device</button>
-                    <button type="button" class="awg-add-btn" onclick="fetchDhcpClients();" style="margin-left:6px;">+ From DHCP List</button>
+                    <input type="button" class="button_gen" value="+ Add Device" onclick="addClientRow('','','vpn_all');">
+                    <input type="button" class="button_gen" value="+ From DHCP List" onclick="fetchDhcpClients();" style="margin-left:6px;">
                 </div>
 
                 <!-- ==================== GEO ROUTING ==================== -->
                 <div id="geo_section" style="display:none;">
 
-                <div style="background:#1a1a2e; border:1px solid #91071f; border-radius:4px; padding:10px 14px; margin-top:10px; font-size:12px; color:#e0a050;">
+                <div style="border:1px solid #fc0; border-radius:4px; padding:10px 14px; margin-top:10px; font-size:12px; color:#fc0;">
                     <b>Важно:</b> Для работы VPN Geo устройства должны использовать роутер как DNS-сервер.<br>
                     iPhone: Настройки &gt; Wi-Fi &gt; (i) &gt; DNS &gt; Вручную &gt; только <% nvram_get("lan_ipaddr"); %><br>
                     macOS/Windows: укажите <% nvram_get("lan_ipaddr"); %> как DNS в настройках сети. Отключите DNS-over-HTTPS в браузере.
@@ -1044,9 +998,9 @@ function initAutocompleteIp(){
                 <tr>
                     <th>Auto-update Lists</th>
                     <td>
-                        <label style="color:#CEC1C7;"><input type="checkbox" id="geo_autoupdate"> Daily at 4:00 AM</label>
+                        <label><input type="checkbox" id="geo_autoupdate"> Daily at 4:00 AM</label>
                         &nbsp;&nbsp;
-                        <input type="button" class="awg-import-btn" value="Update Now" onclick="updateGeoLists();" style="font-size:11px; padding:4px 12px;">
+                        <input type="button" class="button_gen" value="Update Now" onclick="updateGeoLists();">
                     </td>
                 </tr>
                 </table>
@@ -1061,6 +1015,9 @@ function initAutocompleteIp(){
                 <!-- ==================== LOG ==================== -->
                 <div class="awg-section" style="margin-top:15px;">Log</div>
                 <div id="awg_log" class="awg-log">Waiting for data...</div>
+                <div style="text-align:right; font-size:11px; opacity:0.5; margin-top:4px;">
+                    <a href="https://github.com/r0otx/asuswrt-merlin-amneziawg" target="_blank" style="text-decoration:none;">&copy; r0otx</a>
+                </div>
 
             </td></tr>
             </table>
