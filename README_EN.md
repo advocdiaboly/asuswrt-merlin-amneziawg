@@ -2,7 +2,7 @@
 
 [[русский]](README.md) [[english]](README_EN.md)
 
-DPI-obfuscated WireGuard VPN client with web UI for ASUS routers running [Asuswrt-Merlin](https://www.asuswrt-merlin.net/) firmware. Provides per-device policy routing and GeoIP/GeoSite selective routing using [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/) protocol.
+DPI-obfuscated WireGuard VPN client with web UI for ASUS routers running [Asuswrt-Merlin](https://www.asuswrt-merlin.net/) firmware. Provides per-device policy routing and GeoIP/GeoSite selective routing using [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) protocol.
 
 Fully userspace implementation -- no kernel module required, works on any kernel version.
 
@@ -45,7 +45,7 @@ Other aarch64 Merlin routers should also work.
 - [Asuswrt-Merlin firmware](https://www.asuswrt-merlin.net/download) (`384.15` or later, `3006.x`)
 - [Entware](https://github.com/Entware/Entware/wiki/Install-on-Asus-stock-firmware) installed (use [amtm](https://diversion.ch/amtm.html) to install)
 - SSH access to the router
-- AmneziaWG server (e.g. from [Amnezia VPN](https://amnezia.org/))
+- AmneziaWG server (self-hosted)
 
 ## Installation
 

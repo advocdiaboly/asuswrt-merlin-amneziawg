@@ -2,7 +2,7 @@
 
 [[русский]](README.md) [[english]](README_EN.md)
 
-VPN-клиент с обходом DPI-блокировок на базе [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/) с веб-интерфейсом для роутеров ASUS на прошивке [Asuswrt-Merlin](https://www.asuswrt-merlin.net/). Маршрутизация по устройствам и выборочная маршрутизация через GeoIP/GeoSite.
+VPN-клиент с обходом DPI-блокировок на базе [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) с веб-интерфейсом для роутеров ASUS на прошивке [Asuswrt-Merlin](https://www.asuswrt-merlin.net/). Маршрутизация по устройствам и выборочная маршрутизация через GeoIP/GeoSite.
 
 Полностью userspace-реализация -- не требует kernel module, работает на любой версии ядра.
 
@@ -45,7 +45,7 @@ VPN-клиент с обходом DPI-блокировок на базе [Amnez
 - [Прошивка Asuswrt-Merlin](https://www.asuswrt-merlin.net/download) (`384.15` и новее, `3006.x`)
 - Установленный [Entware](https://github.com/Entware/Entware/wiki/Install-on-Asus-stock-firmware) (ставится через [amtm](https://diversion.ch/amtm.html))
 - SSH-доступ к роутеру
-- AmneziaWG-сервер (например из [Amnezia VPN](https://amnezia.org/))
+- AmneziaWG-сервер (self-hosted)
 
 ## Установка
 
