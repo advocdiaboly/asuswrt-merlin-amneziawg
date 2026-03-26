@@ -56,6 +56,17 @@ disable_rp_filter(){
     done
 }
 
+# Wait for condition, max N seconds. Usage: wait_for "command" timeout
+wait_for(){
+    local cmd="$1" max="${2:-10}" i=0
+    while [ $i -lt $max ]; do
+        eval "$cmd" && return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
 acquire_lock(){
     local tries=0
     while [ -f "$LOCKFILE" ] && [ $tries -lt 30 ]; do
@@ -348,7 +359,7 @@ setup_firewall(){
     # --- Restart dnsmasq if geo active ---
     if [ $domain_count -gt 0 ] || [ "$has_geo" = true ]; then
         service restart_dnsmasq >/dev/null 2>&1
-        sleep 5
+        wait_for "nslookup localhost 127.0.0.1 >/dev/null 2>&1" 10
         # Pre-resolve domains to populate ipset (parallel, max 10 at a time)
         if [ -f "$DNSMASQ_AWG_CONF" ]; then
             local bg_count=0
@@ -562,8 +573,7 @@ do_start(){
     # Start userspace daemon
     mkdir -p /var/run/amneziawg
     "$AWG_GO" "$IFACE" >/dev/null 2>&1
-    sleep 1
-    if ! ip link show "$IFACE" >/dev/null 2>&1; then
+    if ! wait_for "ip link show $IFACE >/dev/null 2>&1" 5; then
         log_msg "ERROR: amneziawg-go failed to create interface"
         update_status; release_lock; return 1
     fi
@@ -795,28 +805,20 @@ do_watchdog(){
     # Skip if lock held (another operation in progress)
     [ -f "$LOCKFILE" ] && return 0
 
+    local reason=""
     if ! ip link show "$IFACE" >/dev/null 2>&1; then
-        log_msg "WATCHDOG: interface $IFACE missing, restarting"
-        do_stop 2>/dev/null
-        sleep 3
-        do_start
-        return
+        reason="interface $IFACE missing"
+    elif ! pidof amneziawg-go >/dev/null 2>&1; then
+        reason="amneziawg-go process dead"
+    elif ! ping -c 1 -W 5 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
+        reason="tunnel not passing traffic"
     fi
 
-    if ! pidof amneziawg-go >/dev/null 2>&1; then
-        log_msg "WATCHDOG: amneziawg-go process dead, restarting"
+    if [ -n "$reason" ]; then
+        log_msg "WATCHDOG: $reason, restarting"
         do_stop 2>/dev/null
-        sleep 3
+        wait_for "! pidof amneziawg-go >/dev/null 2>&1" 10
         do_start
-        return
-    fi
-
-    if ! ping -c 1 -W 5 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
-        log_msg "WATCHDOG: tunnel not passing traffic, restarting"
-        do_stop 2>/dev/null
-        sleep 3
-        do_start
-        return
     fi
 }
 
@@ -827,8 +829,9 @@ do_service_event(){
     case "$event" in
         awgstart)       do_start ;;
         awgstop)        do_stop ;;
-        awgrestart)     do_stop; sleep 5; do_start ;;
+        awgrestart)     do_stop; wait_for "! pidof amneziawg-go >/dev/null 2>&1" 10; do_start ;;
         awgsaveconf)
+            wait_for "[ -n \"$(get_setting awg_privatekey)\" ]" 5
             generate_config
             update_status
             update_geo_if_needed
@@ -848,7 +851,7 @@ do_service_event(){
 case "$1" in
     start)          do_start ;;
     stop)           do_stop ;;
-    restart)        do_stop; sleep 5; do_start ;;
+    restart)        do_stop; wait_for "! pidof amneziawg-go >/dev/null 2>&1" 10; do_start ;;
     status)         update_status ;;
     update_geo)     update_geo_lists; is_running && setup_firewall; update_status ;;
     watchdog)       do_watchdog ;;
