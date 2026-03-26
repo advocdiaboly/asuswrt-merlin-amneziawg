@@ -96,6 +96,7 @@ cleanup_firewall(){
 
     # Remove cron
     cru d awg_geo_update 2>/dev/null
+    cru d awg_watchdog 2>/dev/null
 
     log_msg "Firewall rules cleaned"
 }
@@ -570,6 +571,9 @@ do_start(){
     awg_addr=$(ip -4 addr show "$IFACE" 2>/dev/null | awk '/inet /{sub(/\/.*/, "", $2); print $2; exit}')
     [ -n "$awg_addr" ] && ip rule add from "$awg_addr" lookup $RT_TABLE prio 100
 
+    # Watchdog: check tunnel every 5 minutes, restart if dead
+    cru a awg_watchdog "*/5 * * * * $ADDON_DIR/amneziawg.sh watchdog"
+
     log_msg "Started"
     update_status
 }
@@ -762,6 +766,37 @@ do_uninstall(){
     log_msg "Uninstalled"
 }
 
+# --- Watchdog (called by cron every 5 min) ---
+
+do_watchdog(){
+    # Check if interface exists
+    if ! ip link show "$IFACE" >/dev/null 2>&1; then
+        log_msg "WATCHDOG: interface $IFACE missing, restarting"
+        do_stop 2>/dev/null
+        sleep 3
+        do_start
+        return
+    fi
+
+    # Check if daemon is alive
+    if ! pidof amneziawg-go >/dev/null 2>&1; then
+        log_msg "WATCHDOG: amneziawg-go process dead, restarting"
+        do_stop 2>/dev/null
+        sleep 3
+        do_start
+        return
+    fi
+
+    # Check if tunnel passes traffic (ping test)
+    if ! ping -c 1 -W 5 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
+        log_msg "WATCHDOG: tunnel not passing traffic, restarting"
+        do_stop 2>/dev/null
+        sleep 3
+        do_start
+        return
+    fi
+}
+
 # --- Service event dispatcher ---
 
 do_service_event(){
@@ -793,6 +828,7 @@ case "$1" in
     restart)        do_stop; sleep 5; do_start ;;
     status)         update_status ;;
     update_geo)     update_geo_lists; is_running && setup_firewall; update_status ;;
+    watchdog)       do_watchdog ;;
     install_page)   do_install_page ;;
     mount_ui)       do_mount_ui ;;
     uninstall)      do_uninstall ;;
