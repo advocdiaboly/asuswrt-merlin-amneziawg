@@ -49,7 +49,15 @@ Other aarch64 Merlin routers should also work.
 
 ## Installation
 
-### From .ipk package (recommended)
+### Quick install (one command)
+
+```shell
+curl -sfL https://raw.githubusercontent.com/r0otx/asuswrt-merlin-amneziawg/main/install-online.sh | sh
+```
+
+The script auto-detects router architecture, downloads the latest package from GitHub releases and installs it.
+
+### From .ipk package
 
 Copy the package to the router and install:
 

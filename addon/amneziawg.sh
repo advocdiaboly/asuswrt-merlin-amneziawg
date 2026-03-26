@@ -4,6 +4,7 @@
 # Userspace amneziawg-go, per-device policy routing, GeoIP/GeoSite
 # =============================================================
 
+AWG_VERSION="1.0.7"
 ADDON_DIR="/jffs/addons/amneziawg"
 AWG_DIR="/opt/amneziawg"
 CONF="$AWG_DIR/awg0.conf"
@@ -360,31 +361,16 @@ setup_firewall(){
     if [ $domain_count -gt 0 ] || [ "$has_geo" = true ]; then
         service restart_dnsmasq >/dev/null 2>&1
         wait_for "nslookup localhost 127.0.0.1 >/dev/null 2>&1" 10
-        # Pre-resolve domains to populate ipset (parallel, max 10 at a time)
+        # Pre-resolve domains in background (ipset populates on-demand anyway)
         if [ -f "$DNSMASQ_AWG_CONF" ]; then
-            local bg_count=0
-            awk -F/ '/^ipset=/{for(i=2;i<NF;i++)print $i}' "$DNSMASQ_AWG_CONF" | while read -r domain; do
+            (awk -F/ '/^ipset=/{for(i=2;i<NF;i++)print $i}' "$DNSMASQ_AWG_CONF" | while read -r domain; do
                 [ -z "$domain" ] && continue
                 nslookup "$domain" 127.0.0.1 >/dev/null 2>&1 &
                 bg_count=$((bg_count + 1))
                 [ $bg_count -ge 10 ] && { wait; bg_count=0; }
-            done
-            wait
+            done; wait; conntrack -F 2>/dev/null; log_msg "Pre-resolve complete") &
         fi
     fi
-
-    # --- Flush conntrack for VPN-routed devices only ---
-    if [ -f "$CLIENTS_FILE" ] && [ -s "$CLIENTS_FILE" ]; then
-        while IFS=',' read -r dev_id name policy mac || [ -n "$dev_id" ]; do
-            dev_id=$(echo "$dev_id" | tr -d ' ')
-            [ -z "$dev_id" ] && continue
-            conntrack -D -s "$dev_id" 2>/dev/null
-        done < "$CLIENTS_FILE"
-    fi
-    # Also flush if default policy is VPN
-    case "$default_policy" in
-        vpn_all|vpn_geo) conntrack -F 2>/dev/null ;;
-    esac
 
     # --- Setup cron ---
     if [ "$(get_setting awg_geo_autoupdate)" = "1" ]; then
@@ -586,6 +572,9 @@ do_start(){
     ip link set "$IFACE" mtu 1280
     ip link set "$IFACE" up
 
+    # Tunnel is connected, update status early so UI sees it
+    update_status
+
     # DNS: ensure queries go through dnsmasq
     if ! grep -q "^nameserver 127.0.0.1" /tmp/resolv.conf 2>/dev/null; then
         local old_dns=$(cat /tmp/resolv.conf 2>/dev/null)
@@ -662,7 +651,7 @@ do_stop(){
     [ -n "$awg_pid" ] && kill "$awg_pid" 2>/dev/null
     rm -f /var/run/amneziawg/"$IFACE".sock
 
-    service restart_dnsmasq >/dev/null 2>&1
+    service restart_dnsmasq >/dev/null 2>&1 &
 
     log_msg "Stopped"
     update_status
@@ -723,7 +712,7 @@ EOF
     [ -z "$geo_domains" ] && geo_domains=0
 
     cat > "$STATUS_FILE" << STATUSEOF
-{"running":${running},"public_key":"${pub_key}","listen_port":"${listen_port}","interface_addr":"${iface_addr}","peers":${peers_json},"default_policy":"${default_policy}","clients":"${clients_data}","active_rules":${active_rules},"ipset_count":${ipset_count},"geo_domains":${geo_domains},"log":"${log_text}"}
+{"running":${running},"version":"${AWG_VERSION}","public_key":"${pub_key}","listen_port":"${listen_port}","interface_addr":"${iface_addr}","peers":${peers_json},"default_policy":"${default_policy}","clients":"${clients_data}","active_rules":${active_rules},"ipset_count":${ipset_count},"geo_domains":${geo_domains},"log":"${log_text}"}
 STATUSEOF
 }
 
@@ -738,6 +727,11 @@ do_install_page(){
     chmod +x "$ADDON_DIR/amneziawg.sh"
 
     [ -f "/tmp/amneziawg_page.asp" ] && cp /tmp/amneziawg_page.asp "$ADDON_DIR/amneziawg_page.asp"
+
+    # Clean old page slots before requesting a new one
+    for f in /www/user/user*.asp; do
+        grep -q "AmneziaWG" "$f" 2>/dev/null && rm -f "$f"
+    done
 
     am_get_webui_page "$ADDON_DIR/amneziawg_page.asp"
     [ "$am_webui_page" = "none" ] && { log_msg "ERROR: No page slot"; return 1; }
@@ -763,6 +757,10 @@ do_install_page(){
 
 do_mount_ui(){
     source /usr/sbin/helper.sh
+    # Clean old slots
+    for f in /www/user/user*.asp; do
+        grep -q "AmneziaWG" "$f" 2>/dev/null && rm -f "$f"
+    done
     am_get_webui_page "$ADDON_DIR/amneziawg_page.asp"
     if [ "$am_webui_page" != "none" ]; then
         cp "$ADDON_DIR/amneziawg_page.asp" "/www/user/$am_webui_page"
@@ -822,6 +820,55 @@ do_watchdog(){
     fi
 }
 
+# --- Update check ---
+
+check_update(){
+    local repo="r0otx/asuswrt-merlin-amneziawg"
+    local latest
+    latest=$(curl -sfL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"v//;s/".*//')
+    if [ -z "$latest" ]; then
+        echo "{\"current\":\"$AWG_VERSION\",\"latest\":\"\",\"update\":false,\"error\":\"Cannot reach GitHub\"}"
+        return
+    fi
+    local update=false
+    [ "$latest" != "$AWG_VERSION" ] && update=true
+    echo "{\"current\":\"$AWG_VERSION\",\"latest\":\"$latest\",\"update\":$update}"
+}
+
+do_update(){
+    log_msg "Updating AmneziaWG..."
+    local repo="r0otx/asuswrt-merlin-amneziawg"
+    local arch=$(uname -m)
+    local pkg_arch
+    case "$arch" in
+        aarch64) pkg_arch="aarch64-3.10" ;;
+        armv7l)  pkg_arch="armv7-2.6" ;;
+        *) log_msg "ERROR: Unsupported arch: $arch"; return 1 ;;
+    esac
+
+    local release_json
+    release_json=$(curl -sfL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null)
+    local ipk_url
+    ipk_url=$(echo "$release_json" | grep '"browser_download_url"' | grep "$pkg_arch" | grep '.ipk"' | head -1 | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/".*//')
+    if [ -z "$ipk_url" ]; then
+        log_msg "ERROR: No package found for $pkg_arch"
+        return 1
+    fi
+
+    local tmp="/tmp/amneziawg_update.ipk"
+    if ! curl -sfL "$ipk_url" -o "$tmp"; then
+        log_msg "ERROR: Download failed"
+        return 1
+    fi
+
+    do_stop 2>/dev/null
+    wait_for "! pidof amneziawg-go >/dev/null 2>&1" 10
+    opkg install "$tmp"
+    rm -f "$tmp"
+    do_start
+    log_msg "Update complete"
+}
+
 # --- Service event dispatcher ---
 
 do_service_event(){
@@ -833,7 +880,6 @@ do_service_event(){
         awgsaveconf)
             wait_for "[ -n \"$(get_setting awg_privatekey)\" ]" 5
             generate_config
-            update_status
             update_geo_if_needed
             is_running && setup_firewall
             update_status
@@ -841,6 +887,13 @@ do_service_event(){
         awgupdategeo)
             update_geo_lists
             is_running && setup_firewall
+            update_status
+            ;;
+        awgcheckupdate)
+            check_update > /www/user/awg_update.htm
+            ;;
+        awgdoupdate)
+            do_update
             update_status
             ;;
     esac
@@ -854,6 +907,8 @@ case "$1" in
     restart)        do_stop; wait_for "! pidof amneziawg-go >/dev/null 2>&1" 10; do_start ;;
     status)         update_status ;;
     update_geo)     update_geo_lists; is_running && setup_firewall; update_status ;;
+    check_update)   check_update ;;
+    update)         do_update ;;
     watchdog)       do_watchdog ;;
     install_page)   do_install_page ;;
     mount_ui)       do_mount_ui ;;

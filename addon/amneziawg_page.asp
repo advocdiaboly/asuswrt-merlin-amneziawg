@@ -37,6 +37,11 @@
     color: #fff;
     border: 1px solid #a00;
 }
+.awg-status.connecting {
+    background: #b8860b;
+    color: #fff;
+    border: 1px solid #daa520;
+}
 
 .awg-section {
     margin: 14px 0 6px 0;
@@ -114,6 +119,54 @@ function initial(){
     loadV2flyCategories();
     initAutocomplete();
     initAutocompleteIp();
+    checkForUpdate();
+}
+
+function checkForUpdate(){
+    // Check GitHub directly from browser (no backend needed)
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', 'https://api.github.com/repos/r0otx/asuswrt-merlin-amneziawg/releases/latest', true);
+    xhr.timeout = 10000;
+    xhr.onload = function(){
+        if(xhr.status !== 200) return;
+        try {
+            var data = JSON.parse(xhr.responseText);
+            var latest = (data.tag_name || '').replace(/^v/, '');
+            showVersionInfo('', latest, false);
+        } catch(e){}
+    };
+    xhr.send();
+}
+
+function showVersionInfo(currentIgnored, latest, hasUpdateIgnored){
+    // Get current version from status file
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/user/awg_status.htm?_=' + Date.now(), true);
+    xhr.timeout = 3000;
+    xhr.onload = function(){
+        try {
+            var s = JSON.parse(xhr.responseText);
+            var current = s.version || '';
+            var vi = document.getElementById('awg_version_info');
+            var ub = document.getElementById('awg_update_btn');
+            if(!vi) return;
+            if(current) vi.textContent = 'v' + current;
+            if(latest && current && latest !== current){
+                ub.style.display = 'inline';
+                ub.innerHTML = '<input type="button" class="button_gen" value="Update to v' + latest + '" onclick="doUpdate();" style="font-size:11px; padding:2px 10px;">';
+            }
+        } catch(e){}
+    };
+    xhr.send();
+}
+
+function doUpdate(){
+    if(!confirm('Update AmneziaWG to latest version?\nThe tunnel will be restarted.')) return;
+    var log = document.getElementById('awg_log');
+    if(log) log.innerHTML = 'Updating... Please wait.';
+    document.form.action_script.value = "start_awgdoupdate";
+    document.form.submit();
+    setTimeout(function(){ location.reload(); }, 60000);
 }
 
 function loadSettings(){
@@ -402,36 +455,46 @@ function addManualIPs(input){
 function awgAction(action){
     document.form.action_script.value = action;
     document.form.submit();
-    waitAndReload(action);
-}
+    var badge = document.getElementById('awg_badge');
+    var isStop = action.indexOf('stop') !== -1;
+    var expect = !isStop;
 
-function hideLoading(){
-    location.reload();
-}
+    // Stop periodic refresh while action runs
+    if(statusTimer){ clearInterval(statusTimer); statusTimer = null; }
 
-function waitAndReload(action){
-    var expect = (action.indexOf('stop') !== -1) ? false : true;
+    // Show transitional status
+    badge.className = 'awg-status connecting';
+    badge.innerHTML = isStop ? '&#9679; Stopping...' : '&#9679; Connecting...';
+
+    // Poll until status is fully ready
     var attempts = 0;
-    var check = setInterval(function(){
+    var poll = setInterval(function(){
         attempts++;
         var xhr = new XMLHttpRequest();
         xhr.open('GET', '/user/awg_status.htm?_=' + Date.now(), true);
-        xhr.timeout = 2000;
+        xhr.timeout = 3000;
         xhr.onload = function(){
             try {
                 var s = JSON.parse(xhr.responseText);
-                if(s.running === expect || attempts >= 20){
-                    clearInterval(check);
-                    location.reload();
+                // For start: wait until running AND has public key (fully ready)
+                // For stop: wait until not running
+                var ready = isStop ? !s.running : (s.running && s.public_key && s.public_key !== '' && s.public_key !== '(none)');
+                if(ready || attempts >= 90){
+                    clearInterval(poll);
+                    updateStatusUI(s);
+                    statusTimer = setInterval(refreshStatus, 5000);
                 }
             } catch(e){
-                if(attempts >= 20){ clearInterval(check); location.reload(); }
+                if(attempts >= 90){ clearInterval(poll); refreshStatus(); }
             }
         };
-        xhr.onerror = function(){ if(attempts >= 20){ clearInterval(check); location.reload(); } };
+        xhr.onerror = function(){ if(attempts >= 90){ clearInterval(poll); refreshStatus(); } };
         xhr.send();
-    }, 1500);
+    }, 2000);
 }
+
+function showLoading(){}
+function hideLoading(){}
 
 function refreshStatus(){
     var xhr = new XMLHttpRequest();
@@ -756,6 +819,8 @@ function initAutocompleteIp(){
                 <div class="formfonttitle" style="display:flex; align-items:center; gap:10px;">
                     <span style="font-size:20px; font-weight:bold; letter-spacing:1px;">AmneziaWG</span>
                     <span style="font-size:13px; font-weight:normal;">VPN Client</span>
+                    <span id="awg_version_info" style="margin-left:auto; font-size:11px; opacity:0.6;"></span>
+                    <span id="awg_update_btn" style="display:none;"></span>
                 </div>
                 <div style="margin:10px 0 10px 5px;" class="splitLine"></div>
 
