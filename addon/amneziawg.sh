@@ -4,7 +4,7 @@
 # Userspace amneziawg-go, per-device policy routing, GeoIP/GeoSite
 # =============================================================
 
-AWG_VERSION="1.1.2"
+AWG_VERSION="1.1.3"
 ADDON_DIR="/jffs/addons/amneziawg"
 AWG_DIR="/opt/amneziawg"
 CONF="$AWG_DIR/awg0.conf"
@@ -553,6 +553,16 @@ do_start(){
         return 0
     fi
 
+    # Wait for network to be ready (br0 up with IP), important on boot
+    if ! ip -4 addr show br0 2>/dev/null | grep -q "inet "; then
+        log_msg "Waiting for network (br0)..."
+        wait_for "ip -4 addr show br0 2>/dev/null | grep -q 'inet '" 30
+        if ! ip -4 addr show br0 2>/dev/null | grep -q "inet "; then
+            log_msg "ERROR: Network not ready (br0 has no IP after 30s)"
+            return 1
+        fi
+    fi
+
     acquire_lock
 
     generate_config || { update_status; release_lock; return 1; }
@@ -843,13 +853,16 @@ check_update(){
 do_update(){
     log_msg "Updating AmneziaWG..."
     local repo="r0otx/asuswrt-merlin-amneziawg"
-    local arch=$(uname -m)
     local pkg_arch
-    case "$arch" in
-        aarch64) pkg_arch="aarch64-3.10" ;;
-        armv7l)  pkg_arch="armv7-2.6" ;;
-        *) log_msg "ERROR: Unsupported arch: $arch"; return 1 ;;
-    esac
+    pkg_arch=$(opkg print-architecture 2>/dev/null | awk '$1=="arch" && $2!="all" {print $2}' | head -1)
+    if [ -z "$pkg_arch" ]; then
+        local arch=$(uname -m)
+        case "$arch" in
+            aarch64) pkg_arch="aarch64-3.10" ;;
+            armv7l)  pkg_arch="armv7-2.6" ;;
+            *) log_msg "ERROR: Unsupported arch: $arch"; return 1 ;;
+        esac
+    fi
 
     local release_json
     release_json=$(curl -sfL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null)
@@ -870,7 +883,7 @@ do_update(){
     wait_for "! pidof amneziawg-go >/dev/null 2>&1" 10
     # Block auto-start during opkg install (S99amneziawg is triggered by opkg)
     touch /tmp/.awg_no_autostart
-    opkg install "$tmp"
+    opkg install "$tmp" || opkg install --force-architecture "$tmp"
     rm -f "$tmp"
     # Stop VPN if opkg's init script started it
     do_stop 2>/dev/null

@@ -13,25 +13,32 @@ echo "  AmneziaWG Installer"
 echo "============================================"
 echo ""
 
-# Detect architecture
-ARCH=$(uname -m)
-case "$ARCH" in
-    aarch64) PKG_ARCH="aarch64-3.10" ;;
-    armv7l)  PKG_ARCH="armv7-2.6" ;;
-    *)
-        echo "ERROR: Unsupported architecture: $ARCH"
-        echo "Supported: aarch64, armv7l"
-        exit 1
-        ;;
-esac
-echo "Architecture: $ARCH ($PKG_ARCH)"
+# Ensure /opt/bin is in PATH (not set in non-interactive curl|sh shells)
+export PATH="/opt/bin:/opt/sbin:$PATH"
 
 # Check Entware
-if ! command -v opkg >/dev/null 2>&1; then
+if [ ! -x /opt/bin/opkg ]; then
     echo "ERROR: Entware not installed. Install it first via amtm."
     exit 1
 fi
 echo "Entware: OK"
+
+# Detect architecture from opkg config (matches what opkg actually expects)
+PKG_ARCH=$(opkg print-architecture 2>/dev/null | awk '$1=="arch" && $2!="all" {print $2}' | head -1)
+if [ -z "$PKG_ARCH" ]; then
+    # Fallback to uname-based detection
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        aarch64) PKG_ARCH="aarch64-3.10" ;;
+        armv7l)  PKG_ARCH="armv7-2.6" ;;
+        *)
+            echo "ERROR: Unsupported architecture: $ARCH"
+            echo "Supported: aarch64, armv7l"
+            exit 1
+            ;;
+    esac
+fi
+echo "Architecture: $PKG_ARCH"
 
 # Get latest release URL
 echo "Fetching latest release..."
@@ -66,7 +73,7 @@ echo "Downloaded: $TMP_DIR/$IPK_FILE"
 
 # Install
 echo "Installing..."
-opkg install "$TMP_DIR/$IPK_FILE"
+opkg install "$TMP_DIR/$IPK_FILE" || opkg install --force-architecture "$TMP_DIR/$IPK_FILE"
 RC=$?
 
 # Cleanup
