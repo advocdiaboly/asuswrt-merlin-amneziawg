@@ -4,7 +4,7 @@
 # =============================================================
 FROM --platform=linux/amd64 alpine:3.19 AS builder
 
-RUN apk add --no-cache make curl tar git
+RUN apk add --no-cache make curl tar git file
 
 # musl.cc cross-toolchain (soft-float, static musl libc)
 RUN curl -L https://musl.cc/arm-linux-musleabi-cross.tgz | tar xz -C /opt
