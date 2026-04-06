@@ -854,7 +854,7 @@ EOF
         fi
     fi
 
-    log_text=$(dmesg 2>/dev/null | grep -i "amneziawg\|awg" | tail -10 | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|/\\n/g')
+    log_text=$(grep "amneziawg" /tmp/syslog.log 2>/dev/null | tail -20 | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|/\\n/g')
 
     local default_policy=$(get_setting awg_default_policy)
     [ -z "$default_policy" ] && default_policy="direct"
