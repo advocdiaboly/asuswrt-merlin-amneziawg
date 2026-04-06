@@ -21,7 +21,7 @@ TOOL_SRC=""
 PAGE_SRC=""
 ADDON_SCRIPT_SRC=""
 
-for dir in "$SRC_DIR" "/tmp"; do
+for dir in "$SRC_DIR"; do
     [ -f "$dir/amneziawg.ko" ] && MODULE_SRC="$dir/amneziawg.ko"
     [ -f "$dir/awg" ] && TOOL_SRC="$dir/awg"
     [ -f "$dir/amneziawg_page.asp" ] && PAGE_SRC="$dir/amneziawg_page.asp"
