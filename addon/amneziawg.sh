@@ -719,13 +719,6 @@ do_start(){
     ip link set "$IFACE" mtu 1280
     ip link set "$IFACE" up
 
-    # DNS: ensure queries go through dnsmasq
-    if ! grep -q "^nameserver 127.0.0.1" /tmp/resolv.conf 2>/dev/null; then
-        local old_dns=$(cat /tmp/resolv.conf 2>/dev/null)
-        echo "nameserver 127.0.0.1" > /tmp/resolv.conf
-        echo "$old_dns" >> /tmp/resolv.conf
-    fi
-
     # Routing table
     local lan_net gw endpoint
     lan_net=$(get_lan_net)
