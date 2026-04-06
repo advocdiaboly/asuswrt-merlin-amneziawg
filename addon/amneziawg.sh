@@ -375,7 +375,7 @@ setup_firewall(){
                 if [ -n "$mac" ]; then
                     iptables -t mangle -A "$AWG_CHAIN" -m mac --mac-source "$mac" -j RETURN
                 else
-                    ip rule add from "$dev_id" lookup main prio 99
+                    ip rule add from "$dev_id" lookup main prio 97
                 fi
                 log_msg "Route: $dev_id ($name) -> Direct (excluded)"
             else
@@ -395,7 +395,7 @@ setup_firewall(){
                     if [ -n "$mac" ]; then
                         iptables -t mangle -A "$AWG_CHAIN" -m mac --mac-source "$mac" -j MARK --set-mark "$FWMARK"
                     else
-                        ip rule add from "$dev_id" lookup $RT_TABLE prio 100
+                        ip rule add from "$dev_id" lookup $RT_TABLE prio 99
                     fi
                     log_msg "Route: $dev_id ($name) -> VPN (all)"
                     ;;
