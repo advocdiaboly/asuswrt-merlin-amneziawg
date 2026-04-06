@@ -162,7 +162,8 @@ download_geoip_service(){
     local svc="$1"
     svc=$(echo "$svc" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
     [ -z "$svc" ] && return 1
-    { curl -sfL "${V2FLY_GEOIP_BASE}/${svc}.txt" 2>/dev/null || curl -sfLk "${V2FLY_GEOIP_BASE}/${svc}.txt" 2>/dev/null; } | grep -v ":" > "$GEO_DIR/geoip/v2fly_${svc}.cidr"
+    { curl -sfL --connect-timeout 10 --max-time 30 "${V2FLY_GEOIP_BASE}/${svc}.txt" 2>/dev/null || \
+      curl -sfLk --connect-timeout 10 --max-time 30 "${V2FLY_GEOIP_BASE}/${svc}.txt" 2>/dev/null; } | grep -v ":" > "$GEO_DIR/geoip/v2fly_${svc}.cidr"
     [ -s "$GEO_DIR/geoip/v2fly_${svc}.cidr" ] || { rm -f "$GEO_DIR/geoip/v2fly_${svc}.cidr"; return 1; }
 }
 
