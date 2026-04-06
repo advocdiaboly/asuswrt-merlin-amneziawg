@@ -22,7 +22,7 @@ DNSMASQ_INCLUDE="/jffs/configs/dnsmasq.conf.add"
 SCRIPT_NAME="amneziawg"
 RT_TABLE=300
 AWG_CHAIN="AWG"
-LOCKFILE="/tmp/.awg_lock"
+LOCKDIR="/tmp/.awg_lock"
 V2FLY_GEOIP_BASE="https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text"
 
 # --- Helpers ---
@@ -70,15 +70,24 @@ wait_for(){
 
 acquire_lock(){
     local tries=0
-    while [ -f "$LOCKFILE" ] && [ $tries -lt 30 ]; do
-        sleep 1
+    while ! mkdir "$LOCKDIR" 2>/dev/null; do
+        if [ -f "$LOCKDIR/pid" ]; then
+            local old_pid
+            old_pid=$(cat "$LOCKDIR/pid" 2>/dev/null)
+            if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
+                rm -rf "$LOCKDIR"
+                continue
+            fi
+        fi
         tries=$((tries + 1))
+        [ $tries -ge 30 ] && { log_msg "ERROR: lock timeout"; return 1; }
+        sleep 1
     done
-    echo $$ > "$LOCKFILE"
+    echo $$ > "$LOCKDIR/pid"
 }
 
 release_lock(){
-    rm -f "$LOCKFILE"
+    rm -rf "$LOCKDIR"
 }
 
 human_size(){
@@ -822,7 +831,7 @@ do_uninstall(){
 
 do_watchdog(){
     # Skip if lock held (another operation in progress)
-    [ -f "$LOCKFILE" ] && return 0
+    [ -d "$LOCKDIR" ] && return 0
 
     local reason=""
     if ! ip link show "$IFACE" >/dev/null 2>&1; then
