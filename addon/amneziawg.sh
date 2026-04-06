@@ -786,9 +786,30 @@ do_start(){
     # Watchdog
     cru a awg_watchdog "*/5 * * * * '$ADDON_DIR/amneziawg.sh' watchdog"
 
-    log_msg "Started"
+    log_msg "Started, verifying tunnel connectivity..."
     update_status
     release_lock
+
+    # Health check: verify tunnel passes traffic, rollback if not
+    local hc_ok=false
+    local hc_try=0
+    while [ $hc_try -lt 30 ]; do
+        if ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
+            hc_ok=true
+            break
+        fi
+        hc_try=$((hc_try + 1))
+        sleep 2
+    done
+    if [ "$hc_ok" = true ]; then
+        log_msg "Tunnel verified: traffic passing"
+        update_status
+    else
+        log_msg "ERROR: Tunnel not passing traffic after 60s, rolling back to prevent lockout"
+        do_stop 2>/dev/null
+        log_msg "VPN stopped automatically. Check server config and endpoint reachability."
+        update_status
+    fi
 }
 
 # --- Stop ---
