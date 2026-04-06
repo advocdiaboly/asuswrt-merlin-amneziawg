@@ -729,6 +729,7 @@ do_start(){
     [ ! -f "$AWG_GO" ] && { log_msg "ERROR: amneziawg-go not found"; update_status; release_lock; return 1; }
 
     # Ensure TUN device exists
+    modprobe tun 2>/dev/null
     mkdir -p /dev/net
     [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200
     chmod 600 /dev/net/tun
