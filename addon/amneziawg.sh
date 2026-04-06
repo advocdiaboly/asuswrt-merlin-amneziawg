@@ -52,7 +52,7 @@ get_endpoint(){
 }
 
 flush_conntrack(){
-    if conntrack -D --mark "$FWMARK"/"$FWMARK" 2>/dev/null; then
+    if command -v conntrack >/dev/null 2>&1 && conntrack -D --mark "$FWMARK"/"$FWMARK" 2>/dev/null; then
         return 0
     fi
     conntrack -F 2>/dev/null
@@ -406,15 +406,19 @@ setup_firewall(){
                     log_msg "Route: $dev_id ($name) -> VPN (all)"
                     ;;
                 vpn_geo)
-                    if [ -n "$mac" ]; then
-                        iptables -t mangle -A "$AWG_CHAIN" -m mac --mac-source "$mac" \
-                            -m set --match-set "$IPSET_NAME" dst -j MARK --set-mark "$FWMARK"
+                    if ipset list "$IPSET_NAME" >/dev/null 2>&1; then
+                        if [ -n "$mac" ]; then
+                            iptables -t mangle -A "$AWG_CHAIN" -m mac --mac-source "$mac" \
+                                -m set --match-set "$IPSET_NAME" dst -j MARK --set-mark "$FWMARK"
+                        else
+                            iptables -t mangle -A "$AWG_CHAIN" -s "$dev_id" \
+                                -m set --match-set "$IPSET_NAME" dst -j MARK --set-mark "$FWMARK"
+                        fi
+                        has_geo=true
+                        log_msg "Route: $dev_id ($name) -> VPN (geo)"
                     else
-                        iptables -t mangle -A "$AWG_CHAIN" -s "$dev_id" \
-                            -m set --match-set "$IPSET_NAME" dst -j MARK --set-mark "$FWMARK"
+                        log_msg "WARNING: ipset missing, skipping geo for $dev_id ($name)"
                     fi
-                    has_geo=true
-                    log_msg "Route: $dev_id ($name) -> VPN (geo)"
                     ;;
             esac
         done < "$CLIENTS_FILE"
@@ -635,6 +639,15 @@ generate_config(){
     [ -n "$peer_psk" ] && { validate_wgkey "$peer_psk" || return 1; }
     validate_endpoint "$peer_endpoint" || return 1
     [ -n "$listenport" ] && { validate_port "$listenport" || { log_msg "ERROR: Invalid listen port: $listenport"; return 1; }; }
+    [ -n "$jc" ] && { validate_uint "$jc" || { log_msg "ERROR: Invalid Jc: $jc"; return 1; }; }
+    [ -n "$jmin" ] && { validate_uint "$jmin" || { log_msg "ERROR: Invalid Jmin: $jmin"; return 1; }; }
+    [ -n "$jmax" ] && { validate_uint "$jmax" || { log_msg "ERROR: Invalid Jmax: $jmax"; return 1; }; }
+    [ -n "$s1" ] && { validate_uint "$s1" || { log_msg "ERROR: Invalid S1: $s1"; return 1; }; }
+    [ -n "$s2" ] && { validate_uint "$s2" || { log_msg "ERROR: Invalid S2: $s2"; return 1; }; }
+    [ -n "$h1" ] && { validate_uint "$h1" || { log_msg "ERROR: Invalid H1: $h1"; return 1; }; }
+    [ -n "$h2" ] && { validate_uint "$h2" || { log_msg "ERROR: Invalid H2: $h2"; return 1; }; }
+    [ -n "$h3" ] && { validate_uint "$h3" || { log_msg "ERROR: Invalid H3: $h3"; return 1; }; }
+    [ -n "$h4" ] && { validate_uint "$h4" || { log_msg "ERROR: Invalid H4: $h4"; return 1; }; }
 
     {
         echo "[Interface]"
@@ -698,7 +711,7 @@ do_start(){
         fi
     fi
 
-    acquire_lock
+    acquire_lock || { log_msg "Cannot acquire lock, aborting start"; update_status; return 1; }
 
     generate_config || { update_status; release_lock; return 1; }
     [ ! -f "$CONF" ] && { log_msg "ERROR: No config"; update_status; release_lock; return 1; }
@@ -768,7 +781,7 @@ do_start(){
 # --- Stop ---
 
 do_stop(){
-    acquire_lock
+    acquire_lock || { log_msg "Cannot acquire lock, aborting stop"; return 1; }
 
     iptables -D INPUT -i "$IFACE" -j ACCEPT 2>/dev/null
     iptables -D FORWARD -i "$IFACE" -j ACCEPT 2>/dev/null
@@ -1070,6 +1083,17 @@ do_wan_event(){
 do_firewall_restart(){
     if is_running; then
         log_msg "Firewall restart detected, re-applying rules"
+        # Clean base rules first to prevent duplicates
+        iptables -D INPUT -i "$IFACE" -j ACCEPT 2>/dev/null
+        iptables -D FORWARD -i "$IFACE" -j ACCEPT 2>/dev/null
+        iptables -D FORWARD -o "$IFACE" -j ACCEPT 2>/dev/null
+        iptables -t mangle -D FORWARD -o "$IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+        iptables -t mangle -D FORWARD -i "$IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+        local lan_net_old
+        lan_net_old=$(get_lan_net)
+        [ -n "$lan_net_old" ] && iptables -t nat -D POSTROUTING -s "$lan_net_old" -o "$IFACE" -j MASQUERADE 2>/dev/null
+        iptables -t nat -D POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null
+        cleanup_ipv6_block
         iptables -I INPUT -i "$IFACE" -j ACCEPT
         iptables -I FORWARD -i "$IFACE" -j ACCEPT
         iptables -I FORWARD -o "$IFACE" -j ACCEPT
