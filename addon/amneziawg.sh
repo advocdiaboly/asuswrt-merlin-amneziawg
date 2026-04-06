@@ -469,7 +469,7 @@ setup_firewall(){
 
     # --- Setup cron ---
     if [ "$(get_setting awg_geo_autoupdate)" = "1" ]; then
-        cru a awg_geo_update "0 4 * * * $ADDON_DIR/amneziawg.sh update_geo"
+        cru a awg_geo_update "0 4 * * * '$ADDON_DIR/amneziawg.sh' update_geo"
     fi
 
     log_msg "Firewall configured: $ip_count IPs, $domain_count domains"
@@ -752,7 +752,7 @@ do_start(){
     [ -n "$awg_addr" ] && ip rule add from "$awg_addr" lookup $RT_TABLE prio 100
 
     # Watchdog
-    cru a awg_watchdog "*/5 * * * * $ADDON_DIR/amneziawg.sh watchdog"
+    cru a awg_watchdog "*/5 * * * * '$ADDON_DIR/amneziawg.sh' watchdog"
 
     log_msg "Started"
     update_status
