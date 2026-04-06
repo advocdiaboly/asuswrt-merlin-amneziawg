@@ -49,9 +49,10 @@ if [ -z "$RELEASE_JSON" ]; then
     exit 1
 fi
 
-VERSION=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//' | sed 's/".*//')
+VERSION=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/^v//;s/".*//')
 # Validate version string
 case "$VERSION" in
+    "") echo "ERROR: Could not parse version"; exit 1 ;;
     *[!0-9.]*) echo "ERROR: Invalid version format: $VERSION"; exit 1 ;;
 esac
 echo "Latest version: $VERSION"
