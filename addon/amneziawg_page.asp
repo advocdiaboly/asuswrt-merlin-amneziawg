@@ -395,9 +395,14 @@ function setCheckedValues(prefix, csv){
 }
 
 function updateGeoLists(){
-    if(!confirm('Force re-download all GeoIP and domain lists?\nThis may take 1-2 minutes.')) return;
+    var btn = document.getElementById('btn_geo_update');
+    var isDownload = btn && btn.value === 'Download Lists';
+    var msg = isDownload
+        ? 'Download all GeoIP and domain lists?\nThis may take 1-2 minutes.'
+        : 'Force re-download all GeoIP and domain lists?\nThis may take 1-2 minutes.';
+    if(!confirm(msg)) return;
     var log = document.getElementById('awg_log');
-    if(log) log.innerHTML = 'Downloading geo lists... Please wait.';
+    if(log) log.textContent = 'Downloading geo lists... Please wait.';
     document.form.action_script.value = "start_awgupdategeo";
     document.form.submit();
     setTimeout(function(){ location.reload(); }, 60000);
@@ -622,6 +627,17 @@ function updateStatusUI(s){
         rulesEl.style.color = '#93E7FF';
     } else {
         rulesEl.innerHTML = '';
+    }
+
+    // Update geo button text based on database availability
+    var geoBtn = document.getElementById('btn_geo_update');
+    if(geoBtn){
+        if(s.geo_downloaded){
+            geoBtn.value = 'Update Now';
+        } else {
+            geoBtn.value = 'Download Lists';
+            geoBtn.style.fontWeight = 'bold';
+        }
     }
 }
 
@@ -1118,7 +1134,7 @@ function initAutocompleteIp(){
                     <td>
                         <label><input type="checkbox" id="geo_autoupdate"> Daily at 4:00 AM</label>
                         &nbsp;&nbsp;
-                        <input type="button" class="button_gen" value="Update Now" onclick="updateGeoLists();">
+                        <input type="button" class="button_gen" id="btn_geo_update" value="Update Now" onclick="updateGeoLists();">
                     </td>
                 </tr>
                 </table>

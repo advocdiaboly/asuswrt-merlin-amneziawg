@@ -533,11 +533,14 @@ save_clients(){
     fi
 }
 
-# Check if geo databases exist locally, download if missing
+# Check if geo databases exist locally
+geo_available(){
+    [ -d "$GEO_DIR/geoip" ] && [ -n "$(ls "$GEO_DIR/geoip/"*.cidr 2>/dev/null)" ]
+}
+
 update_geo_if_needed(){
-    if [ ! -d "$GEO_DIR/geoip" ] || [ -z "$(ls "$GEO_DIR/geoip/"*.cidr 2>/dev/null)" ]; then
-        log_msg "Geo databases not found, downloading..."
-        download_all_geo
+    if ! geo_available; then
+        log_msg "WARNING: Geo databases not downloaded. Use Update Now in web UI."
     fi
 }
 
@@ -866,8 +869,11 @@ EOF
     [ -f "$DNSMASQ_AWG_CONF" ] && geo_domains=$(grep -c "^ipset=" "$DNSMASQ_AWG_CONF" 2>/dev/null)
     [ -z "$geo_domains" ] && geo_domains=0
 
+    local geo_downloaded=false
+    geo_available && geo_downloaded=true
+
     cat > "$STATUS_FILE" << STATUSEOF
-{"running":${running},"version":"${AWG_VERSION}","public_key":"${pub_key}","listen_port":"${listen_port}","interface_addr":"${iface_addr}","peers":${peers_json},"default_policy":"${default_policy}","clients":"${clients_data}","active_rules":${active_rules},"ipset_count":${ipset_count},"geo_domains":${geo_domains},"log":"${log_text}"}
+{"running":${running},"version":"${AWG_VERSION}","public_key":"${pub_key}","listen_port":"${listen_port}","interface_addr":"${iface_addr}","peers":${peers_json},"default_policy":"${default_policy}","clients":"${clients_data}","active_rules":${active_rules},"ipset_count":${ipset_count},"geo_domains":${geo_domains},"geo_downloaded":${geo_downloaded},"log":"${log_text}"}
 STATUSEOF
 }
 
@@ -1116,6 +1122,18 @@ do_service_event(){
         awgsaveconf)
             local _wt=0; while [ $_wt -lt 5 ] && [ -z "$(get_setting awg_privatekey)" ]; do sleep 1; _wt=$((_wt+1)); done
             generate_config
+            if ! geo_available; then
+                # Clear geo settings if databases not downloaded
+                local _cs_changed=false
+                for _gf in awg_geo_v2fly awg_geo_v2fly_ip awg_geo_custom_domains awg_geo_custom_ips; do
+                    local _gv=$(get_setting "$_gf")
+                    if [ -n "$_gv" ]; then
+                        sed -i "/^${_gf} /d" "$SETTINGS"
+                        _cs_changed=true
+                    fi
+                done
+                [ "$_cs_changed" = true ] && log_msg "WARNING: Geo fields cleared — databases not downloaded. Click Download Lists first."
+            fi
             update_geo_if_needed
             is_running && setup_firewall
             update_status
