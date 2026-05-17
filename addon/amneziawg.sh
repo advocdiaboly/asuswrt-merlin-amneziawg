@@ -593,8 +593,20 @@ validate_port(){
     return 0
 }
 
-validate_uint(){
-    echo "$1" | grep -qE '^[0-9]+$' || return 1
+validate_uint() {
+    local input="$1"
+    local UINT32_MAX=4294967295
+
+    if echo "$input" | grep -qE '^[0-9]+-[0-9]+$'; then
+        local lower="${input%-*}"
+        local upper="${input#*-}"
+        [ "$lower" -le "$upper" ]         || return 1
+        [ "$upper" -le "$UINT32_MAX" ]    || return 1
+        return 0
+    fi
+
+    echo "$input" | grep -qE '^[0-9]+$'  || return 1
+    [ "$input" -le "$UINT32_MAX" ]        || return 1
     return 0
 }
 
