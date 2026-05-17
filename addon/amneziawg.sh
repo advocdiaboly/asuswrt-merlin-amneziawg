@@ -247,6 +247,74 @@ ipset_load_file(){
     ' "$file" | ipset restore -! 2>/dev/null
 }
 
+# --- GeoIP / GeoSite Helpers ---
+
+extract_v2fly_domains(){
+    local categories="$1"
+    local input_file="$2"
+    local output_dir="$3"
+    [ ! -f "$input_file" ] && return 1
+    mkdir -p "$output_dir"
+    
+    local awk_cmd=""
+    for svc in $(echo "$categories" | tr ',' ' '); do
+        svc=$(echo "$svc" | tr -d ' ')
+        [ -z "$svc" ] && continue
+        awk_cmd="${awk_cmd}cats[\"${svc}\"]=1;"
+    done
+    
+    awk -v outdir="$output_dir" '
+        BEGIN { '"$awk_cmd"' }
+        /^  - name: / { 
+            if (cur_cat && cats[cur_cat]) close(outdir "/v2fly_" cur_cat ".txt")
+            cur_cat=$NF; 
+            found=cats[cur_cat]; 
+            next 
+        }
+        found && /^      - "domain:/ { 
+            val = $0; sub(/.*"domain:/,"",val); sub(/".*/,"",val);
+            if (val != "") print val > (outdir "/v2fly_" cur_cat ".txt") 
+        }
+        found && /^      - "full:/ { 
+            val = $0; sub(/.*"full:/,"",val); sub(/".*/,"",val);
+            if (val != "") print val > (outdir "/v2fly_" cur_cat ".txt") 
+        }
+    ' "$input_file"
+}
+
+build_dnsmasq_config(){
+    local domains_dir="$1"
+    local output_conf="$2"
+    local ipset_name="$3"
+    
+    echo "# AmneziaWG domain routing - auto-generated" > "$output_conf"
+    local total_count=0
+    for f in "$domains_dir"/*.txt "$domains_dir"/*.lst; do
+        [ ! -f "$f" ] && continue
+        local d_cnt
+        d_cnt=$(sed -e 's/\r//g' -e '/^#/d' -e 's/^\.//' -e 's/:@[^ ]*$//' "$f" | \
+            grep -E '^[a-zA-Z0-9._-]+$' | \
+            awk -v ipset="$ipset_name" -v conf="$output_conf" '
+                {
+                    if (count == 0) line = "ipset=/"
+                    line = line $0 "/"
+                    count++
+                    total++
+                    if (count >= 20) {
+                        print line ipset >> conf
+                        count = 0
+                    }
+                }
+                END {
+                    if (count > 0) print line ipset >> conf
+                    print total
+                }
+            ')
+        total_count=$((total_count + ${d_cnt:-0}))
+    done
+    echo "$total_count"
+}
+
 # --- Unified firewall setup ---
 
 setup_dns_interception(){
@@ -346,17 +414,9 @@ setup_firewall(){
     # --- Extract v2fly domains from downloaded database ---
     local geo_v2fly=$(get_setting awg_geo_v2fly)
     if [ -n "$geo_v2fly" ] && [ -f "$GEO_DIR/v2fly_all.yml" ]; then
+        log_msg "Extracting domains for: $geo_v2fly"
         rm -f "$GEO_DIR/domains/v2fly_"*.txt
-        for svc in $(echo "$geo_v2fly" | tr ',' ' '); do
-            svc=$(echo "$svc" | tr -d ' ')
-            [ -z "$svc" ] && continue
-            awk -v cat="$svc" '
-                /^  - name: / { name=$NF; found=(name==cat); next }
-                found && /^      - "domain:/ { sub(/.*"domain:/,""); sub(/".*/,""); print }
-                found && /^      - "full:/ { sub(/.*"full:/,""); sub(/".*/,""); print }
-                found && /^  - name: / { if(found) exit }
-            ' "$GEO_DIR/v2fly_all.yml" > "$GEO_DIR/domains/v2fly_${svc}.txt"
-        done
+        extract_v2fly_domains "$geo_v2fly" "$GEO_DIR/v2fly_all.yml" "$GEO_DIR/domains"
     fi
 
     # --- Save custom domains/IPs ---
@@ -375,29 +435,9 @@ setup_firewall(){
     fi
 
     # --- Build dnsmasq config for domain-based routing ---
+    log_msg "Building dnsmasq configuration..."
     local domain_count=0
-    echo "# AmneziaWG domain routing - auto-generated" > "$DNSMASQ_AWG_CONF"
-    for f in "$GEO_DIR"/domains/*.txt "$GEO_DIR"/domains/*.lst; do
-        [ ! -f "$f" ] && continue
-        local chunk_line="ipset=/"
-        local chunk_count=0
-        while read -r domain; do
-            domain=$(echo "$domain" | tr -d ' \r')
-            [ -z "$domain" ] && continue
-            echo "$domain" | grep -q '^#' && continue
-            domain=$(echo "$domain" | sed 's/^\.//;s/:@[^ ]*$//')
-            echo "$domain" | grep -q '[^a-zA-Z0-9._-]' && continue
-            chunk_line="${chunk_line}${domain}/"
-            chunk_count=$((chunk_count + 1))
-            domain_count=$((domain_count + 1))
-            if [ $chunk_count -ge 20 ]; then
-                echo "${chunk_line}${IPSET_NAME}" >> "$DNSMASQ_AWG_CONF"
-                chunk_line="ipset=/"
-                chunk_count=0
-            fi
-        done < "$f"
-        [ $chunk_count -gt 0 ] && echo "${chunk_line}${IPSET_NAME}" >> "$DNSMASQ_AWG_CONF"
-    done
+    domain_count=$(build_dnsmasq_config "$GEO_DIR/domains" "$DNSMASQ_AWG_CONF" "$IPSET_NAME")
 
     # Add conf-file include to dnsmasq (idempotent)
     if [ $domain_count -gt 0 ]; then
@@ -1232,6 +1272,7 @@ do_service_event(){
 # --- Main ---
 
 case "$1" in
+    test_mode)      return 0 ;; # Hook for unit tests
     start)          do_start ;;
     stop)           do_stop ;;
     restart)        do_stop "keep_cron"; wait_for_pid_exit amneziawg-go 10; do_start "keep_cron" ;;
