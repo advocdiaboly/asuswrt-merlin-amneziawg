@@ -1,0 +1,108 @@
+# =============================================================
+# AmneziaWG kernel module builder for ASUS RT_AX5400
+# Merlin 3004.388.x | Kernel 4.19.183 | armv7l (HND 5.04)
+# =============================================================
+FROM --platform=linux/amd64 ubuntu:20.04 AS builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# --- Build dependencies ---
+RUN dpkg --add-architecture i386 && \
+    apt-get update && apt-get install -y \
+    git build-essential bc libncurses5-dev \
+    libelf-dev libssl-dev wget curl file \
+    gawk flex bison cpio rsync unzip xz-utils \
+    libc6-i386 lib32stdc++6 lib32z1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Global Git optimizations for large repos
+RUN git config --global http.postBuffer 524288000 && \
+    git config --global http.lowSpeedLimit 0 && \
+    git config --global http.lowSpeedTime 999999 && \
+    git config --global core.compression 0
+
+WORKDIR /build
+
+# =============================================================
+# 1. Broadcom HND armv7l toolchain (GCC 9.2)
+# =============================================================
+RUN git clone --depth 1 https://github.com/RMerl/am-toolchains.git && \
+    cd am-toolchains && \
+    git sparse-checkout init --cone && \
+    git sparse-checkout set \
+        brcm-arm-hnd/crosstools-arm-gcc-9.2-linux-4.19-glibc-2.30-binutils-2.32
+
+ENV TOOLCHAIN=/build/am-toolchains/brcm-arm-hnd/crosstools-arm-gcc-9.2-linux-4.19-glibc-2.30-binutils-2.32
+ENV PATH="${TOOLCHAIN}/usr/bin:${PATH}"
+ENV CROSS_COMPILE=arm-buildroot-linux-gnueabi-
+ENV ARCH=arm
+
+# Fix hardcoded paths in the toolchain (bison/m4)
+RUN mkdir -p /home/defjovi/temp3/toolchain && \
+    ln -s ${TOOLCHAIN} /home/defjovi/temp3/toolchain/crosstools-arm-gcc-9.2-linux-4.19-glibc-2.30-binutils-2.32
+
+# =============================================================
+# 2. Kernel source from GNUton (Broadcom HND patched 4.19.x)
+# =============================================================
+RUN git clone --depth 1 --branch master --progress \
+        https://github.com/gnuton/asuswrt-merlin.ng.git && \
+    cd asuswrt-merlin.ng && \
+    git sparse-checkout init --cone && \
+    git sparse-checkout set \
+        release/src-rt-5.04axhnd.675x/kernel/linux-4.19 \
+        release/src-rt-5.04axhnd.675x/kernel/bcmkernel
+
+ENV KERNEL_SRC=/build/asuswrt-merlin.ng/release/src-rt-5.04axhnd.675x/kernel/linux-4.19
+
+# =============================================================
+# 3. Kernel config
+# =============================================================
+COPY kernel.config /tmp/kernel.config
+RUN if [ ! -s /tmp/kernel.config ]; then echo "ERROR: kernel.config is empty!"; exit 1; fi && \
+    cp /tmp/kernel.config ${KERNEL_SRC}/.config
+
+# Prepare kernel build tree
+RUN cd ${KERNEL_SRC} && \
+    # Safely comment out the Broadcom SDK config inclusion and set BUILD_NAME
+    sed -i 's|^include ../../.config|# include ../../.config\nBUILD_NAME=RT_AX5400|' Makefile && \
+    # Create stubs for Broadcom-specific directories that are outside the kernel tree
+    for d in net/netfilter/fltr net/sched/sch_cake; do \
+        rm -rf "$d"; mkdir -p "$d"; touch "$d/Kconfig" "$d/Makefile"; \
+    done && \
+    mkdir -p ../../bcmdrivers && touch ../../bcmdrivers/Kconfig.autogen && \
+    # Link ALL Broadcom-specific headers
+    cp -r ../bcmkernel/include/* include/ && \
+    touch Module.symvers && \
+    yes "" | make ARCH=arm CROSS_COMPILE=${CROSS_COMPILE} BUILD_NAME=RT_AX5400 oldconfig && \
+    make ARCH=arm CROSS_COMPILE=${CROSS_COMPILE} BUILD_NAME=RT_AX5400 modules_prepare
+
+# =============================================================
+# 4. Build AmneziaWG kernel module (amneziawg.ko)
+# =============================================================
+RUN git clone --depth 1 --branch v1.0.20260322 \
+        https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
+
+RUN cd amneziawg-linux-kernel-module/src && \
+    # Patch compat.h to avoid redefinition of skb_queue_empty_lockless (backported in Merlin 4.19.183)
+    sed -i 's/static inline bool skb_queue_empty_lockless/static inline bool __compat_skb_queue_empty_lockless/' compat/compat.h && \
+    make ARCH=arm \
+         CROSS_COMPILE=${CROSS_COMPILE} \
+         KERNELDIR=${KERNEL_SRC} \
+         BUILD_NAME=RT_AX5400 && \
+    mkdir -p /output && cp amneziawg.ko /output/amneziawg.ko
+
+# =============================================================
+# 5. Build AmneziaWG tools (awg)
+# =============================================================
+RUN git clone --depth 1 --branch v1.0.20260223 \
+        https://github.com/amnezia-vpn/amneziawg-tools.git
+
+RUN cd amneziawg-tools/src && \
+    make CC=${CROSS_COMPILE}gcc \
+         LD=${CROSS_COMPILE}ld \
+         AR=${CROSS_COMPILE}ar \
+         PLATFORM_CFLAGS="-O2" && \
+    (cp awg /output/awg 2>/dev/null || cp wg /output/awg)
+
+FROM scratch AS export
+COPY --from=builder /output/ /

@@ -9,6 +9,7 @@ ADDON_DIR="/jffs/addons/amneziawg"
 AWG_DIR="/opt/amneziawg"
 CONF="$AWG_DIR/awg0.conf"
 AWG_GO="$AWG_DIR/amneziawg-go"
+AWG_KO="$AWG_DIR/amneziawg.ko"
 AWG_BIN="$AWG_DIR/awg"
 IFACE="awg0"
 STATUS_FILE="/www/user/awg_status.htm"
@@ -819,24 +820,51 @@ do_start(){
     log_msg "Generating configuration..."
     generate_config || { log_msg "ERROR: Configuration generation failed"; update_status; release_lock; return 1; }
     [ ! -f "$CONF" ] && { log_msg "ERROR: No config file found at $CONF"; update_status; release_lock; return 1; }
-    [ ! -f "$AWG_GO" ] && { log_msg "ERROR: amneziawg-go not found at $AWG_GO"; update_status; release_lock; return 1; }
+    [ ! -f "$AWG_BIN" ] && { log_msg "ERROR: awg tool not found at $AWG_BIN"; update_status; release_lock; return 1; }
 
-    # Ensure TUN device exists
-    modprobe tun 2>/dev/null
-    mkdir -p /dev/net
-    [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200
-    chmod 600 /dev/net/tun
-
-    # Start userspace daemon
-    mkdir -p /var/run/amneziawg
-    log_msg "Starting amneziawg-go daemon for $IFACE..."
-    "$AWG_GO" "$IFACE" > /tmp/awg_daemon.log 2>&1 &
-    if ! wait_for_iface "$IFACE" 10; then
-        log_msg "ERROR: amneziawg-go failed to create interface $IFACE"
-        [ -f /tmp/awg_daemon.log ] && log_msg "Daemon output: $(cat /tmp/awg_daemon.log)"
-        update_status; release_lock; return 1
+    # Implementation: Kernel or Userspace
+    if [ -f "$AWG_KO" ]; then
+        log_msg "Kernel module found, trying to load..."
+        # Disable Broadcom FlowCache to prevent packet drops in kernel mode
+        if command -v fc >/dev/null 2>&1; then
+            log_msg "Disabling Broadcom FlowCache for kernel-mode VPN..."
+            fc disable 2>/dev/null
+        fi
+        insmod "$AWG_KO" 2>/dev/null
+        if lsmod | grep -q amneziawg; then
+            log_msg "Kernel module loaded successfully"
+            ip link add dev "$IFACE" type amneziawg 2>/dev/null
+            if ! wait_for_iface "$IFACE" 5; then
+                log_msg "ERROR: Failed to create kernel interface $IFACE"
+                rmmod amneziawg 2>/dev/null
+            else
+                log_msg "Kernel interface $IFACE created"
+            fi
+        else
+            log_msg "WARNING: Failed to load kernel module, falling back to userspace"
+        fi
     fi
-    log_msg "Userspace daemon started"
+
+    if ! is_running; then
+        [ ! -f "$AWG_GO" ] && { log_msg "ERROR: amneziawg-go not found at $AWG_GO"; update_status; release_lock; return 1; }
+        
+        # Ensure TUN device exists for userspace
+        modprobe tun 2>/dev/null
+        mkdir -p /dev/net
+        [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200
+        chmod 600 /dev/net/tun
+
+        # Start userspace daemon
+        mkdir -p /var/run/amneziawg
+        log_msg "Starting amneziawg-go daemon for $IFACE..."
+        GOGC=20 "$AWG_GO" "$IFACE" > /tmp/awg_daemon.log 2>&1 &
+        if ! wait_for_iface "$IFACE" 10; then
+            log_msg "ERROR: amneziawg-go failed to create interface $IFACE"
+            [ -f /tmp/awg_daemon.log ] && log_msg "Daemon output: $(cat /tmp/awg_daemon.log)"
+            update_status; release_lock; return 1
+        fi
+        log_msg "Userspace daemon started"
+    fi
 
     # Configure interface
     log_msg "Applying configuration to $IFACE..."
@@ -847,8 +875,10 @@ do_start(){
         log_msg "Assigning IP $addr to $IFACE"
         ip addr add "$addr" dev "$IFACE"
     fi
+    # Use conservative MTU for DPI-obfuscated tunnels (1280 is safe for all ISPs)
     ip link set "$IFACE" mtu 1280
     ip link set "$IFACE" up
+    
     log_msg "Interface $IFACE is up"
 
     # Routing table
@@ -988,6 +1018,16 @@ do_stop(){
         fi
     fi
     rm -f /var/run/amneziawg/"$IFACE".sock
+
+    if lsmod | grep -q amneziawg; then
+        log_msg "Unloading kernel module..."
+        rmmod amneziawg 2>/dev/null
+        # Restore Broadcom FlowCache for full router performance
+        if command -v fc >/dev/null 2>&1; then
+            log_msg "Restoring Broadcom FlowCache..."
+            fc enable 2>/dev/null
+        fi
+    fi
 
     log_msg "Restarting dnsmasq..."
     service restart_dnsmasq >/dev/null 2>&1 &
@@ -1165,10 +1205,34 @@ do_watchdog(){
     local reason=""
     if ! ip link show "$IFACE" >/dev/null 2>&1; then
         reason="interface $IFACE missing"
-    elif ! pidof amneziawg-go >/dev/null 2>&1; then
-        reason="amneziawg-go process dead"
-    elif ! ping -c 1 -W 5 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
-        reason="tunnel not passing traffic"
+    elif ! pidof amneziawg-go >/dev/null 2>&1 && ! lsmod | grep -q amneziawg; then
+        reason="backend process/module dead"
+    else
+        # Check connectivity
+        local ping_ok=false
+        for target in 8.8.8.8 1.1.1.1; do
+            if ping -c 1 -W 5 -I "$IFACE" "$target" >/dev/null 2>&1; then
+                ping_ok=true
+                break
+            fi
+        done
+
+        if [ "$ping_ok" = false ]; then
+            # Pings failed, check handshake age as last resort
+            local handshake
+            handshake=$("$AWG_BIN" show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2}')
+            if [ -n "$handshake" ] && [ "$handshake" != "0" ]; then
+                local now=$(date +%s)
+                local diff=$((now - handshake))
+                if [ $diff -lt 180 ]; then
+                    # Handshake is fresh (< 3 min), don't restart even if pings fail
+                    return 0
+                fi
+                reason="tunnel not passing traffic (handshake too old: ${diff}s)"
+            else
+                reason="tunnel not passing traffic (no handshake)"
+            fi
+        fi
     fi
 
     if [ -n "$reason" ]; then

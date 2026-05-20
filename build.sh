@@ -41,7 +41,14 @@ fi
 echo "[2/3] Building amneziawg.ko + awg (this may take 10-30 min on first run)..."
 echo ""
 
-DOCKER_BUILDKIT=1 docker build --output=./output .
+DOCKERFILE="Dockerfile"
+# Auto-detect if we should use AX5400 specific Dockerfile
+if grep -q "CONFIG_MACH_RT_AX5400=y" kernel.config 2>/dev/null || [ "$2" == "ax5400" ]; then
+    echo "      Target: RT-AX5400 (armv7l)"
+    DOCKERFILE="Dockerfile.ax5400"
+fi
+
+DOCKER_BUILDKIT=1 docker build -f "$DOCKERFILE" --output=./output .
 
 # --- Step 3: Verify ---
 echo ""
