@@ -13,21 +13,22 @@ AmneziaWG userspace daemon + web UI addon for ASUS routers running Asuswrt-Merli
 ## Build
 
 ```bash
-# Build amneziawg-go (userspace) via Docker
-./build-go.sh                 # default: arm v7
+# Build amneziawg-go (userspace) via Generic Builder
+./build-go.sh v0.2.18 arm 7   # default: ARMv7 (RT-AX5400)
 ./build-go.sh v0.2.18 arm64   # for 64-bit routers
 
-# Build awg CLI tool
-./build.sh                    # ARM64
-DOCKER_BUILDKIT=1 docker build -f Dockerfile.arm32 --output=output . # ARMv7
+# Build amneziawg.ko kernel module
+./build.sh <router-ip>        # ARM64 (default)
+./build.sh <router-ip> ax5400 # ARMv7 (uses Dockerfile.ax5400)
 ```
 
 ## Architecture
 
 ### Userspace vs Kernel Module
-While an AmneziaWG kernel module is available, this project defaults to **`amneziawg-go` (userspace)** for maximum compatibility and stability.
-- **Why:** The kernel module conflicts with the ASUS "Flow Control" (Hardware Acceleration) feature on many models, leading to system instability or bypass of VPN routing. Userspace implementation avoids these kernel-level conflicts.
-- **Diagnostics:** The script checks for the presence of the `amneziawg` kernel module and issues a warning if found to prevent potential conflicts with the userspace daemon.
+The system supports both implementations, managed via the `AWG_IMPLEMENTATION` toggle in `amneziawg.sh` ("userspace", "kernel", or "auto").
+- **Userspace (Default):** Uses `amneziawg-go`. Recommended for Broadcom HND routers to keep hardware acceleration (FlowCache) enabled.
+- **Kernel Module:** Offers higher throughput but **disables Broadcom FlowCache** to prevent packet drops. 
+- **Conflict Management:** The script checks for the presence of the `amneziawg` kernel module and issues a warning if found while in userspace mode to prevent potential conflicts.
 - **Process Robustness:** `do_start` proactively cleans up any orphaned `amneziawg-go` processes, and `do_stop` ensures a clean shutdown with a 5-second wait and `kill -9` fallback.
 
 ### Memory & Performance Optimizations (Critical)
@@ -47,7 +48,7 @@ Low-RAM routers (512MB) require specific tuning:
 - **Policy Routing:** Three policies per device: `vpn_all` (table 300), `vpn_geo` (ipset match + table 300), or `direct`.
 - **DNS Interception:** When VPN is active, the script forces all LAN DNS traffic (port 53) to the router's `dnsmasq` and rejects outgoing DoH (port 443) to known providers. This ensures GeoSite domain-based routing is never bypassed by client-side DNS settings.
 - **IPv6 Leak Protection:** Automatically injects `ip6tables` REJECT rules when the tunnel is active to prevent traffic leaking via IPv6 if the ISP provides it.
-- **Resilient Watchdog:** The 5-minute watchdog checks connectivity via pings (3 attempts with 2s timeout). If pings fail, it captures the **Handshake Age** for logging and diagnostics. To prevent maintenance tasks from wiping out scheduled jobs, `do_start` and `setup_firewall` default to `init_cron` for initial provisioning, while maintenance and restart routines (like the watchdog) explicitly pass a `keep_cron` flag to preserve existing cron scheduling.
+- **Resilient Watchdog:** The 5-minute watchdog checks connectivity via pings (3 attempts with 2s timeout). If pings fail, it captures the **Handshake Age** and **Memory Status** (`free` output) for diagnostics. To prevent maintenance tasks from wiping out scheduled jobs, `do_start` and `setup_firewall` default to `init_cron` for initial provisioning, while maintenance and restart routines explicitly pass a `keep_cron` flag.
 - **Health Check & Rollback:** On startup, the script performs a 60-second connectivity test. To prevent race conditions, a global execution lock is held throughout the entire **Start → Verify → Rollback** sequence. If the tunnel fails to pass traffic, it automatically rolls back firewall changes and stops the daemon using a `no_lock` bypass to prevent deadlocks.
 - **Atomic Locking:** All service actions (start, stop, restart, watchdog) are synchronized via a `/tmp/.awg_lock` directory. The lock is **re-entrant** (owner-aware via PID), allowing internal functions (like `setup_firewall`) to be called from within a locked start sequence without deadlocking. The lock duration is specifically extended to cover the asynchronous health check loop, preventing overlapping execution attempts from multiple sources.
 - **Background Pre-resolution:** Domain pre-resolution (populating `ipset` via `nslookup`) is performed in the **background** during firewall setup. This prevents blocking the main execution loop (and the system's `service-event` queue) for several minutes, especially on routers with thousands of domains. This change mitigates "RT throttling" and system-wide service timeouts during DHCP renewals or manual saves.
@@ -69,10 +70,14 @@ Low-RAM routers (512MB) require specific tuning:
 
 ### Debugging Findings (May 2026 Investigation)
 
-- **Log Truncation & Persistence:** Identified that `/tmp/awg_daemon.log` was frequently overwritten using the `>` redirection in `do_start`, leading to "empty" logs when the watchdog triggered a restart. Append mode (`>>`) is required to preserve crash history across restarts.
-- **"Split-Brain" Process State:** Discovered scenarios where the `awg0` interface disappears from the system while the `amneziawg-go` process remains active (or becomes a "zombie"/stuck in uninterruptible sleep, e.g., PID 12333). Since the watchdog and `is_running` primarily check for the interface, this leads to redundant start attempts and log overwrites.
-- **Timestamp Correlation:** Noted a **3-hour timezone offset** between the system `syslog.log` and the `awg_daemon.log` output. Diagnostic efforts must account for this shift when correlating interface loss events with daemon debug logs.
-- **Kernel/Userspace Conflict:** Confirmed that loading the `amneziawg.ko` kernel module while attempting to use `amneziawg-go` produces log warnings ("Running amneziawg-go is not required...") and may contribute to interface management instability on certain router platforms.
+- **32-bit Junk Packet Bug:** Identified that `amneziawg-go` versions prior to **v0.2.18** have a critical math bug on 32-bit (armv7l) architectures, causing the daemon to crash during junk packet processing. **v0.2.18 is required for RT-AX5400.**
+- **Log Truncation & Persistence:** Identified that `/tmp/awg_daemon.log` was frequently overwritten using the `>` redirection in `do_start`. Append mode (`>>`) is now used to preserve crash history.
+- **Broadcom HND FlowCache Conflict:** Confirmed that decrypted packets from the kernel module are dropped by the hardware accelerator if `fc enable` is active. `amneziawg.sh` now automatically runs `fc disable` when in kernel mode.
+- **HND Kernel Build Requirements:**
+  - **Headers:** Building against Merlin 4.19 (HND 5.04) requires recursive copying of `bcmkernel/include/*` into the kernel tree.
+  - **Redefinitions:** `skb_queue_empty_lockless` must be patched in the AmneziaWG compat layer to avoid redefinition errors with vendor kernels.
+  - **Macro Identifiers:** compiler macros (like `BUILD_NAME`) cannot contain hyphens; use `RT_AX5400`.
+- **"Split-Brain" Process State:** Discovered scenarios where the `awg0` interface disappears while the `amneziawg-go` process remains active. The watchdog now checks for both.
 
 ### Testing & Quality Assurance
 
