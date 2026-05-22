@@ -23,6 +23,7 @@ DNSMASQ_INCLUDE="/jffs/configs/dnsmasq.conf.add"
 SCRIPT_NAME="amneziawg"
 RT_TABLE=300
 AWG_LOG_LEVEL="debug" # info, error, or debug
+AWG_IMPLEMENTATION="userspace" # "kernel", "userspace", or "auto"
 AWG_CHAIN="AWG"
 LOCKDIR="/tmp/.awg_lock"
 V2FLY_GEOIP_BASE="https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text"
@@ -849,7 +850,7 @@ do_start(){
     [ ! -f "$AWG_BIN" ] && { log_msg "ERROR: awg tool not found at $AWG_BIN"; update_status; release_lock; return 1; }
 
     # Implementation: Kernel or Userspace
-    if [ -f "$AWG_KO" ]; then
+    if [ "$AWG_IMPLEMENTATION" != "userspace" ] && [ -f "$AWG_KO" ]; then
         log_msg "Kernel module found, trying to load..."
         # Disable Broadcom FlowCache to prevent packet drops in kernel mode
         if command -v fc >/dev/null 2>&1; then
