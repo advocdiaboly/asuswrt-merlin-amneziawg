@@ -67,6 +67,13 @@ Low-RAM routers (512MB) require specific tuning:
   - **Graceful Stop:** `do_stop` attempts to kill the daemon *before* deleting the interface, ensuring a clean state transition and allowing the daemon to shut down naturally. It uses a 5-second wait with a `kill -9` fallback.
 - **Connectivity Monitoring:** The health check loop logs its progress and failure reasons to aid in diagnosing endpoint reachability or obfuscation parameter issues.
 
+### Debugging Findings (May 2026 Investigation)
+
+- **Log Truncation & Persistence:** Identified that `/tmp/awg_daemon.log` was frequently overwritten using the `>` redirection in `do_start`, leading to "empty" logs when the watchdog triggered a restart. Append mode (`>>`) is required to preserve crash history across restarts.
+- **"Split-Brain" Process State:** Discovered scenarios where the `awg0` interface disappears from the system while the `amneziawg-go` process remains active (or becomes a "zombie"/stuck in uninterruptible sleep, e.g., PID 12333). Since the watchdog and `is_running` primarily check for the interface, this leads to redundant start attempts and log overwrites.
+- **Timestamp Correlation:** Noted a **3-hour timezone offset** between the system `syslog.log` and the `awg_daemon.log` output. Diagnostic efforts must account for this shift when correlating interface loss events with daemon debug logs.
+- **Kernel/Userspace Conflict:** Confirmed that loading the `amneziawg.ko` kernel module while attempting to use `amneziawg-go` produces log warnings ("Running amneziawg-go is not required...") and may contribute to interface management instability on certain router platforms.
+
 ### Testing & Quality Assurance
 
 - **Modular Logic:** Core parsing and configuration building are isolated into standalone functions within `amneziawg.sh`.
