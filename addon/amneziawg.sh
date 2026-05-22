@@ -857,9 +857,15 @@ do_start(){
     mkdir -p /var/run/amneziawg
     log_msg "Starting amneziawg-go daemon for $IFACE..."
     echo "--- Daemon starting at $(date) ---" >> /tmp/awg_daemon.log
+    
+    # Diagnostics: check if kernel module is loaded
+    if lsmod | grep -q "amneziawg"; then
+        log_msg "WARNING: AmneziaWG kernel module is loaded! This may conflict with userspace daemon."
+    fi
+
     # Optimize Go runtime for memory-constrained router environment
-    # 320MiB is a safe limit for 512MB RAM routers (like RT-AX5400)
-    # GOGC=20 triggers more frequent garbage collection to keep heap size minimal
+    # 320MiB is the limit for 512MB RAM routers to prevent heap expansion beyond physical limits.
+    # GOGC=20 triggers more frequent garbage collection to keep heap size minimal.
     GOMEMLIMIT=320MiB GOGC=20 LOG_LEVEL="$AWG_LOG_LEVEL" "$AWG_GO" "$IFACE" >> /tmp/awg_daemon.log 2>&1 &
     if ! wait_for_iface "$IFACE" 10; then
         log_msg "ERROR: amneziawg-go failed to create interface $IFACE"
@@ -1205,7 +1211,8 @@ do_watchdog(){
         fi
     elif ! pidof amneziawg-go >/dev/null 2>&1; then
         reason="amneziawg-go process dead"
-    elif ! ping -c 1 -W 5 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
+    # Use 3 pings with 2s timeout each for better resilience against single packet loss
+    elif ! ping -c 3 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
         local handshake
         handshake=$("$AWG_BIN" show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2}')
         local hs_msg="no handshake"
@@ -1218,6 +1225,8 @@ do_watchdog(){
 
     if [ -n "$reason" ]; then
         log_msg "WATCHDOG: $reason, restarting"
+        # Log memory status before restart for diagnostics
+        log_msg "WATCHDOG DEBUG: $(free | awk '/Mem:/{printf "Memory: total=%d, used=%d, free=%d", $2, $3, $4}')"
         do_stop "keep_cron" 2>/dev/null
         wait_for_pid_exit amneziawg-go 10
         do_start "keep_cron"
