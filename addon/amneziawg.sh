@@ -9,6 +9,7 @@ ADDON_DIR="/jffs/addons/amneziawg"
 AWG_DIR="/opt/amneziawg"
 CONF="$AWG_DIR/awg0.conf"
 AWG_GO="$AWG_DIR/amneziawg-go"
+AWG_KO="$AWG_DIR/amneziawg.ko"
 AWG_BIN="$AWG_DIR/awg"
 IFACE="awg0"
 STATUS_FILE="/www/user/awg_status.htm"
@@ -845,34 +846,62 @@ do_start(){
     log_msg "Generating configuration..."
     generate_config || { log_msg "ERROR: Configuration generation failed"; update_status; release_lock; return 1; }
     [ ! -f "$CONF" ] && { log_msg "ERROR: No config file found at $CONF"; update_status; release_lock; return 1; }
-    [ ! -f "$AWG_GO" ] && { log_msg "ERROR: amneziawg-go not found at $AWG_GO"; update_status; release_lock; return 1; }
+    [ ! -f "$AWG_BIN" ] && { log_msg "ERROR: awg tool not found at $AWG_BIN"; update_status; release_lock; return 1; }
 
-    # Ensure TUN device exists
-    modprobe tun 2>/dev/null
-    mkdir -p /dev/net
-    [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200
-    chmod 600 /dev/net/tun
-
-    # Start userspace daemon
-    mkdir -p /var/run/amneziawg
-    log_msg "Starting amneziawg-go daemon for $IFACE..."
-    echo "--- Daemon starting at $(date) ---" >> /tmp/awg_daemon.log
-    
-    # Diagnostics: check if kernel module is loaded
-    if lsmod | grep -q "amneziawg"; then
-        log_msg "WARNING: AmneziaWG kernel module is loaded! This may conflict with userspace daemon."
+    # Implementation: Kernel or Userspace
+    if [ -f "$AWG_KO" ]; then
+        log_msg "Kernel module found, trying to load..."
+        # Disable Broadcom FlowCache to prevent packet drops in kernel mode
+        if command -v fc >/dev/null 2>&1; then
+            log_msg "Disabling Broadcom FlowCache for kernel-mode VPN..."
+            fc disable 2>/dev/null
+        fi
+        insmod "$AWG_KO" 2>/dev/null
+        if lsmod | grep -q amneziawg; then
+            log_msg "Kernel module loaded successfully"
+            ip link add dev "$IFACE" type amneziawg 2>/dev/null
+            if ! wait_for_iface "$IFACE" 5; then
+                log_msg "ERROR: Failed to create kernel interface $IFACE"
+                rmmod amneziawg 2>/dev/null
+            else
+                log_msg "Kernel interface $IFACE created"
+            fi
+        else
+            log_msg "WARNING: Failed to load kernel module, falling back to userspace"
+        fi
     fi
 
-    # Optimize Go runtime for memory-constrained router environment
-    # 320MiB is the limit for 512MB RAM routers to prevent heap expansion beyond physical limits.
-    # GOGC=20 triggers more frequent garbage collection to keep heap size minimal.
-    GOMEMLIMIT=320MiB GOGC=20 LOG_LEVEL="$AWG_LOG_LEVEL" "$AWG_GO" "$IFACE" >> /tmp/awg_daemon.log 2>&1 &
-    if ! wait_for_iface "$IFACE" 10; then
-        log_msg "ERROR: amneziawg-go failed to create interface $IFACE"
-        [ -f /tmp/awg_daemon.log ] && log_msg "Daemon output (tail): $(tail -n 20 /tmp/awg_daemon.log)"
-        update_status; release_lock; return 1
+    if ! is_running; then
+        [ ! -f "$AWG_GO" ] && { log_msg "ERROR: amneziawg-go not found at $AWG_GO"; update_status; release_lock; return 1; }
+        
+        # Ensure TUN device exists for userspace
+        modprobe tun 2>/dev/null
+        mkdir -p /dev/net
+        [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200
+        chmod 600 /dev/net/tun
+
+        # Start userspace daemon
+        mkdir -p /var/run/amneziawg
+        log_msg "Starting amneziawg-go daemon for $IFACE..."
+        echo "--- Daemon starting at $(date) ---" >> /tmp/awg_daemon.log
+        
+        # Diagnostics: check if kernel module is loaded
+        if lsmod | grep -q "amneziawg"; then
+            log_msg "WARNING: AmneziaWG kernel module is loaded! This may conflict with userspace daemon."
+        fi
+
+
+        # Optimize Go runtime for memory-constrained router environment
+        # 320MiB is the limit for 512MB RAM routers to prevent heap expansion beyond physical limits.
+        # GOGC=20 triggers more frequent garbage collection to keep heap size minimal.
+        GOMEMLIMIT=320MiB GOGC=20 LOG_LEVEL="$AWG_LOG_LEVEL" "$AWG_GO" "$IFACE" >> /tmp/awg_daemon.log 2>&1 &        
+        if ! wait_for_iface "$IFACE" 10; then
+            log_msg "ERROR: amneziawg-go failed to create interface $IFACE"
+            [ -f /tmp/awg_daemon.log ] && log_msg "Daemon output (tail): $(tail -n 20 /tmp/awg_daemon.log)"
+            update_status; release_lock; return 1
+        fi
+        log_msg "Userspace daemon started"
     fi
-    log_msg "Userspace daemon started"
 
     # Configure interface
     log_msg "Applying configuration to $IFACE..."
@@ -883,8 +912,10 @@ do_start(){
         log_msg "Assigning IP $addr to $IFACE"
         ip addr add "$addr" dev "$IFACE"
     fi
+    # Use conservative MTU for DPI-obfuscated tunnels (1280 is safe for all ISPs)
     ip link set "$IFACE" mtu 1280
     ip link set "$IFACE" up
+    
     log_msg "Interface $IFACE is up"
 
     # Routing table
@@ -1026,6 +1057,16 @@ do_stop(){
     # Finally delete interface (should be gone if daemon died, but just in case)
     ip link del "$IFACE" 2>/dev/null
     rm -f /var/run/amneziawg/"$IFACE".sock
+
+    if lsmod | grep -q amneziawg; then
+        log_msg "Unloading kernel module..."
+        rmmod amneziawg 2>/dev/null
+        # Restore Broadcom FlowCache for full router performance
+        if command -v fc >/dev/null 2>&1; then
+            log_msg "Restoring Broadcom FlowCache..."
+            fc enable 2>/dev/null
+        fi
+    fi
 
     log_msg "Restarting dnsmasq..."
     service restart_dnsmasq >/dev/null 2>&1 &
@@ -1209,9 +1250,9 @@ do_watchdog(){
         else
             log_msg "WATCHDOG DEBUG: Both interface and daemon are gone"
         fi
-    elif ! pidof amneziawg-go >/dev/null 2>&1; then
-        reason="amneziawg-go process dead"
-    # Use 3 pings with 2s timeout each for better resilience against single packet loss
+    elif ! pidof amneziawg-go >/dev/null 2>&1 && ! lsmod | grep -q amneziawg; then
+        reason="backend process/module dead"
+       # Use 3 pings with 2s timeout each for better resilience against single packet loss
     elif ! ping -c 3 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
         local handshake
         handshake=$("$AWG_BIN" show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2}')
