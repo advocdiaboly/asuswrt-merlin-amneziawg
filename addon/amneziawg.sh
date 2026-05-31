@@ -297,8 +297,11 @@ build_dnsmasq_config(){
     local domains_dir="$1"
     local output_conf="$2"
     local ipset_name="$3"
+    local block_ipv6="${4:-0}"
     
     echo "# AmneziaWG domain routing - auto-generated" > "$output_conf"
+    [ "$block_ipv6" = "1" ] && echo "filter-AAAA" >> "$output_conf"
+
     local total_count=0
     for f in "$domains_dir"/*.txt "$domains_dir"/*.lst; do
         [ ! -f "$f" ] && continue
@@ -323,7 +326,7 @@ build_dnsmasq_config(){
             ')
         total_count=$((total_count + ${d_cnt:-0}))
     done
-    echo "$total_count"
+    [ "$block_ipv6" = "1" ] && echo 1 || echo "$total_count"
 }
 
 # --- Unified firewall setup ---
@@ -457,8 +460,10 @@ setup_firewall(){
 
     # --- Build dnsmasq config for domain-based routing ---
     log_msg "Building dnsmasq configuration..."
+    local block_ipv6=$(get_setting awg_block_ipv6_dns)
+    [ -z "$block_ipv6" ] && block_ipv6="1"
     local domain_count=0
-    domain_count=$(build_dnsmasq_config "$GEO_DIR/domains" "$DNSMASQ_AWG_CONF" "$IPSET_NAME")
+    domain_count=$(build_dnsmasq_config "$GEO_DIR/domains" "$DNSMASQ_AWG_CONF" "$IPSET_NAME" "$block_ipv6")
 
     # Add conf-file include to dnsmasq (idempotent)
     if [ $domain_count -gt 0 ]; then
