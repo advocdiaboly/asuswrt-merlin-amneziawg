@@ -69,6 +69,15 @@ test_build_dnsmasq_config(){
     grep -q "ipset=/site1.com/site2.org/test_ipset" "$output_conf" || { echo "FAIL: config line 1 wrong"; return 1; }
     grep -q "ipset=/site3.net/site4.com/test_ipset" "$output_conf" || { echo "FAIL: config cleanup wrong"; return 1; }
     
+    # Test block_ipv6 option
+    echo "Running Test 2b: build_dnsmasq_config with block_ipv6..."
+    local count_v6=$(build_dnsmasq_config "$TEMP_DIR/domains" "$output_conf" "test_ipset" "1")
+    if [ "$count_v6" -ne 1 ]; then
+        echo "FAIL: Expected count 1 with block_ipv6, got $count_v6"
+        return 1
+    fi
+    grep -q "^filter-AAAA$" "$output_conf" || { echo "FAIL: filter-AAAA missing from config"; return 1; }
+
     echo "PASS: build_dnsmasq_config works"
     return 0
 }
