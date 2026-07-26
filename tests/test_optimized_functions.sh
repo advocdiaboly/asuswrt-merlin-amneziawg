@@ -82,9 +82,78 @@ test_build_dnsmasq_config(){
     return 0
 }
 
+# --- Test 3: deferred dnsmasq restart ---
+test_dnsmasq_restart_waits_for_rc_idle(){
+    echo "Running Test 3: deferred dnsmasq restart..."
+
+    DNSMASQ_ACTIVE_CONF="$TEMP_DIR/dnsmasq_active.conf"
+    local rc_busy="$TEMP_DIR/rc_busy"
+    local restart_requested="$TEMP_DIR/restart_requested"
+    local dns_ready="$TEMP_DIR/dns_ready"
+    local pre_resolved="$TEMP_DIR/pre_resolved"
+
+    echo "conf-file=$DNSMASQ_AWG_CONF" > "$DNSMASQ_ACTIVE_CONF"
+    rm -f "$restart_requested" "$dns_ready" "$pre_resolved"
+    : > "$rc_busy"
+
+    nvram(){
+        [ -f "$rc_busy" ] && echo "start_awgstart"
+    }
+    pidof(){
+        [ ! -f "$restart_requested" ] && echo 100
+        [ -f "$dns_ready" ] && echo 200
+    }
+    service(){
+        [ -f "$rc_busy" ] && return 1
+        : > "$restart_requested"
+    }
+    sleep(){
+        if [ -f "$rc_busy" ]; then
+            rm -f "$rc_busy"
+        elif [ -f "$restart_requested" ]; then
+            : > "$dns_ready"
+        fi
+    }
+    pre_resolve_domains(){
+        : > "$pre_resolved"
+    }
+
+    restart_dnsmasq_when_idle || {
+        echo "FAIL: dnsmasq restart failed"
+        return 1
+    }
+    [ -f "$pre_resolved" ] || { echo "FAIL: pre-resolution started too early"; return 1; }
+
+    echo "PASS: dnsmasq restart waits for rc_service and active dnsmasq"
+    return 0
+}
+
+# --- Test 4: skip stop reload during restart ---
+test_stop_dnsmasq_restart_can_be_skipped(){
+    echo "Running Test 4: skip stop dnsmasq restart..."
+
+    local restart_requested="$TEMP_DIR/stop_restart_requested"
+    service(){
+        : > "$restart_requested"
+    }
+
+    restart_dnsmasq_after_stop "skip_dnsmasq"
+    wait
+    [ ! -f "$restart_requested" ] || { echo "FAIL: stop requested an unnecessary dnsmasq restart"; return 1; }
+
+    restart_dnsmasq_after_stop
+    wait
+    [ -f "$restart_requested" ] || { echo "FAIL: regular stop did not restart dnsmasq"; return 1; }
+
+    echo "PASS: dnsmasq restart is skipped only for restart chains"
+    return 0
+}
+
 # Run tests
 test_extract_v2fly_domains || exit 1
 test_build_dnsmasq_config || exit 1
+test_dnsmasq_restart_waits_for_rc_idle || exit 1
+test_stop_dnsmasq_restart_can_be_skipped || exit 1
 
 # Cleanup
 rm -rf "$TEMP_DIR"
