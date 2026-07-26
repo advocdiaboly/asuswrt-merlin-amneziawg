@@ -20,6 +20,7 @@ IPSET_NAME="awg_dst"
 FWMARK="0x100"
 DNSMASQ_AWG_CONF="$AWG_DIR/dnsmasq_awg.conf"
 DNSMASQ_INCLUDE="/jffs/configs/dnsmasq.conf.add"
+DNSMASQ_ACTIVE_CONF="/tmp/etc/dnsmasq.conf"
 SCRIPT_NAME="amneziawg"
 RT_TABLE=300
 AWG_LOG_LEVEL="error" # info, error, or debug
@@ -95,15 +96,64 @@ wait_for_pid_exit(){
     return 1
 }
 
-# Wait for DNS resolver. Usage: wait_for_dns <timeout>
-wait_for_dns(){
-    local max="${1:-10}" i=0
-    while [ $i -lt $max ]; do
-        nslookup localhost 127.0.0.1 >/dev/null 2>&1 && return 0
+pre_resolve_domains(){
+    [ -f "$DNSMASQ_AWG_CONF" ] || return 0
+
+    log_msg "Pre-resolving domains to populate ipset (background)..."
+    local bg_count=0
+    awk -F/ '/^ipset=/{for(i=2;i<NF;i++)print $i}' "$DNSMASQ_AWG_CONF" | while read -r domain; do
+        [ -z "$domain" ] && continue
+        nslookup "$domain" 127.0.0.1 >/dev/null 2>&1 &
+        bg_count=$((bg_count + 1))
+        if [ $bg_count -ge 20 ]; then
+            wait
+            bg_count=0
+        fi
+    done
+    wait
+    log_msg "Pre-resolution finished"
+}
+
+restart_dnsmasq_when_idle(){
+    local i=0 old_pids new_pids
+
+    while [ -n "$(nvram get rc_service 2>/dev/null)" ]; do
+        [ $i -eq 0 ] && log_msg "Deferring dnsmasq restart until rc_service is idle..."
+        if [ $i -ge 90 ]; then
+            log_msg "WARNING: rc_service stayed busy; dnsmasq restart skipped"
+            return 1
+        fi
         sleep 1
         i=$((i + 1))
     done
+
+    old_pids=$(pidof dnsmasq 2>/dev/null)
+    if ! service restart_dnsmasq >/dev/null 2>&1; then
+        log_msg "WARNING: Failed to request dnsmasq restart"
+        return 1
+    fi
+
+    i=0
+    while [ $i -lt 30 ]; do
+        new_pids=$(pidof dnsmasq 2>/dev/null)
+        if [ -n "$new_pids" ] && [ "$new_pids" != "$old_pids" ] && \
+            grep -qF "conf-file=$DNSMASQ_AWG_CONF" "$DNSMASQ_ACTIVE_CONF" 2>/dev/null; then
+            log_msg "dnsmasq restarted with AmneziaWG domain rules"
+            pre_resolve_domains
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+
+    log_msg "WARNING: dnsmasq restart did not apply AmneziaWG domain rules"
     return 1
+}
+
+restart_dnsmasq_after_stop(){
+    [ "$1" = "skip_dnsmasq" ] && return 0
+    log_msg "Restarting dnsmasq..."
+    service restart_dnsmasq >/dev/null 2>&1 &
 }
 
 # Wait for network interface IP. Usage: wait_for_iface_ip <iface> <timeout>
@@ -582,29 +632,7 @@ setup_firewall(){
 
     # --- Restart dnsmasq if geo active ---
     if [ $domain_count -gt 0 ] || [ "$has_geo" = true ]; then
-        log_msg "Restarting dnsmasq with new domain rules..."
-        service restart_dnsmasq >/dev/null 2>&1
-        wait_for_dns 10
-        # Pre-resolve domains to populate ipset in background
-        if [ -f "$DNSMASQ_AWG_CONF" ]; then
-            (
-                # Use a subshell to avoid affecting the main script
-                log_msg "Pre-resolving domains to populate ipset (background)..."
-                local bg_count=0
-                # Increase batch size and optimize extraction
-                awk -F/ '/^ipset=/{for(i=2;i<NF;i++)print $i}' "$DNSMASQ_AWG_CONF" | while read -r domain; do
-                    [ -z "$domain" ] && continue
-                    nslookup "$domain" 127.0.0.1 >/dev/null 2>&1 &
-                    bg_count=$((bg_count + 1))
-                    if [ $bg_count -ge 20 ]; then
-                        wait
-                        bg_count=0
-                    fi
-                done
-                wait
-                log_msg "Pre-resolution finished"
-            ) &
-        fi
+        restart_dnsmasq_when_idle &
     fi
 
     # --- Always flush conntrack so devices reconnect through VPN ---
@@ -1006,6 +1034,7 @@ do_start(){
 do_stop(){
     local keep_cron="$1"
     local no_lock="$2"
+    local skip_dnsmasq="$3"
     if [ "$no_lock" != "no_lock" ]; then
         acquire_lock || { log_msg "ERROR: Cannot acquire lock, aborting stop"; return 1; }
     fi
@@ -1074,8 +1103,7 @@ do_stop(){
         fi
     fi
 
-    log_msg "Restarting dnsmasq..."
-    service restart_dnsmasq >/dev/null 2>&1 &
+    restart_dnsmasq_after_stop "$skip_dnsmasq"
     
     log_msg "Stopped"
     update_status
@@ -1274,7 +1302,7 @@ do_watchdog(){
         log_msg "WATCHDOG: $reason, restarting"
         # Log memory status before restart for diagnostics
         log_msg "WATCHDOG DEBUG: $(free | awk '/Mem:/{printf "Memory: total=%d, used=%d, free=%d", $2, $3, $4}')"
-        do_stop "keep_cron" 2>/dev/null
+        do_stop "keep_cron" "" "skip_dnsmasq" 2>/dev/null
         wait_for_pid_exit amneziawg-go 10
         do_start "keep_cron"
     fi
@@ -1401,7 +1429,7 @@ do_service_event(){
     case "$event" in
         awgstart)       do_start ;;
         awgstop)        do_stop ;;
-        awgrestart)     do_stop "keep_cron"; wait_for_pid_exit amneziawg-go 10; do_start "keep_cron" ;;
+        awgrestart)     do_stop "keep_cron" "" "skip_dnsmasq"; wait_for_pid_exit amneziawg-go 10; do_start "keep_cron" ;;
         awgsaveconf)
             local _wt=0; while [ $_wt -lt 5 ] && [ -z "$(get_setting awg_privatekey)" ]; do sleep 1; _wt=$((_wt+1)); done
             generate_config
@@ -1442,7 +1470,7 @@ case "$1" in
     test_mode)      return 0 ;; # Hook for unit tests
     start)          do_start ;;
     stop)           do_stop ;;
-    restart)        do_stop "keep_cron"; wait_for_pid_exit amneziawg-go 10; do_start "keep_cron" ;;
+    restart)        do_stop "keep_cron" "" "skip_dnsmasq"; wait_for_pid_exit amneziawg-go 10; do_start "keep_cron" ;;
     status)         update_status ;;
     update_geo)     update_geo_lists; is_running && setup_firewall; update_status ;;
     check_update)   check_update ;;
