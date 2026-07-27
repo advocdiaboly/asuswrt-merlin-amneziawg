@@ -222,6 +222,16 @@ human_size(){
 }
 
 # Download a single GeoIP service list (IPv4 only)
+get_geoip_services(){
+    local configured selected="" svc
+    configured=$(get_setting awg_geo_v2fly_ip)
+    for svc in $(echo "$configured" | tr ',' ' '); do
+        svc=$(echo "$svc" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+        echo "$svc" | grep -qE '^[a-z0-9._-]+$' && selected="$selected $svc"
+    done
+    [ -n "$selected" ] && echo "$selected" || echo "$GEOIP_SERVICES"
+}
+
 download_geoip_service(){
     local svc="$1"
     svc=$(echo "$svc" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
@@ -244,10 +254,12 @@ download_all_geo(){
 
     # Download all GeoIP service CIDR lists
     local count=0 total=0 ok=0
-    for svc in $GEOIP_SERVICES; do
+    local geoip_services
+    geoip_services=$(get_geoip_services)
+    for svc in $geoip_services; do
         total=$((total + 1))
     done
-    for svc in $GEOIP_SERVICES; do
+    for svc in $geoip_services; do
         count=$((count + 1))
         log_msg "GeoIP: downloading $svc ($count/$total)..."
         if download_geoip_service "$svc"; then
@@ -267,7 +279,9 @@ download_all_geo(){
         -o "$tmp_yml" 2>/dev/null; then
         if [ -s "$tmp_yml" ]; then
             mv "$tmp_yml" "$GEO_DIR/v2fly_all.yml"
-            grep '  - name: ' "$GEO_DIR/v2fly_all.yml" | sed 's/.*- name: //' | sort > "$GEO_DIR/v2fly_categories.txt"
+            grep '  - name: ' "$GEO_DIR/v2fly_all.yml" | \
+                sed -e 's/.*- name: //' -e 's/^"//' -e 's/"$//' | \
+                sort > "$GEO_DIR/v2fly_categories.txt"
             cp "$GEO_DIR/v2fly_categories.txt" /www/user/v2fly_categories.htm 2>/dev/null
             log_msg "GeoSite: $(wc -l < "$GEO_DIR/v2fly_categories.txt") categories downloaded"
         else
@@ -319,7 +333,7 @@ extract_v2fly_domains(){
     
     local awk_cmd=""
     for svc in $(echo "$categories" | tr ',' ' '); do
-        svc=$(echo "$svc" | tr -d ' ')
+        svc=$(echo "$svc" | tr -d ' "')
         [ -z "$svc" ] && continue
         awk_cmd="${awk_cmd}cats[\"${svc}\"]=1;"
     done
@@ -328,7 +342,8 @@ extract_v2fly_domains(){
         BEGIN { '"$awk_cmd"' }
         /^  - name: / { 
             if (cur_cat && cats[cur_cat]) close(outdir "/v2fly_" cur_cat ".txt")
-            cur_cat=$NF; 
+            cur_cat=$NF;
+            gsub(/^"|"$/, "", cur_cat)
             found=cats[cur_cat]; 
             next 
         }
@@ -376,7 +391,7 @@ build_dnsmasq_config(){
             ')
         total_count=$((total_count + ${d_cnt:-0}))
     done
-    [ "$block_ipv6" = "1" ] && echo 1 || echo "$total_count"
+    echo "$total_count"
 }
 
 # --- Unified firewall setup ---
@@ -470,7 +485,10 @@ setup_firewall(){
     local ip_count=0
     if [ -d "$GEO_DIR/geoip" ]; then
         log_msg "Loading GeoIP databases from $GEO_DIR/geoip..."
-        for f in "$GEO_DIR"/geoip/*.cidr; do
+        local geoip_services
+        geoip_services=$(get_geoip_services)
+        for svc in $geoip_services; do
+            local f="$GEO_DIR/geoip/v2fly_${svc}.cidr"
             [ ! -f "$f" ] && continue
             ipset_load_file "$f" "$IPSET_NAME"
             ip_count=$((ip_count + $(wc -l < "$f")))
@@ -516,7 +534,7 @@ setup_firewall(){
     domain_count=$(build_dnsmasq_config "$GEO_DIR/domains" "$DNSMASQ_AWG_CONF" "$IPSET_NAME" "$block_ipv6")
 
     # Add conf-file include to dnsmasq (idempotent)
-    if [ $domain_count -gt 0 ]; then
+    if [ "$domain_count" -gt 0 ] || [ "$block_ipv6" = "1" ]; then
         if ! grep -qF "conf-file=$DNSMASQ_AWG_CONF" "$DNSMASQ_INCLUDE" 2>/dev/null; then
             echo "conf-file=$DNSMASQ_AWG_CONF" >> "$DNSMASQ_INCLUDE"
         fi
@@ -631,7 +649,7 @@ setup_firewall(){
     fi
 
     # --- Restart dnsmasq if geo active ---
-    if [ $domain_count -gt 0 ] || [ "$has_geo" = true ]; then
+    if [ "$domain_count" -gt 0 ] || [ "$block_ipv6" = "1" ] || [ "$has_geo" = true ]; then
         restart_dnsmasq_when_idle &
     fi
 
