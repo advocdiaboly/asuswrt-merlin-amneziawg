@@ -12,7 +12,11 @@ mkdir -p "$TEMP_DIR/domains"
 
 # --- Mocking ---
 log_msg() { :; } # silence logger
-get_setting() { :; } # dummy
+MOCK_GEOIP_SERVICES=""
+get_setting() {
+    [ "$1" = "awg_geo_v2fly_ip" ] && echo "$MOCK_GEOIP_SERVICES"
+}
+update_status() { :; }
 
 # --- Test 1: extract_v2fly_domains ---
 test_extract_v2fly_domains(){
@@ -20,14 +24,14 @@ test_extract_v2fly_domains(){
     
     local input_yml="$TEMP_DIR/v2fly_all.yml"
     cat > "$input_yml" <<EOF
-  - name: media
+  - name: "media"
     type: domain
-    list:
+    rules:
       - "domain:youtube.com"
       - "full:netflix.com"
-  - name: google
+  - name: "google"
     type: domain
-    list:
+    rules:
       - "domain:google.com"
 EOF
 
@@ -72,8 +76,8 @@ test_build_dnsmasq_config(){
     # Test block_ipv6 option
     echo "Running Test 2b: build_dnsmasq_config with block_ipv6..."
     local count_v6=$(build_dnsmasq_config "$TEMP_DIR/domains" "$output_conf" "test_ipset" "1")
-    if [ "$count_v6" -ne 1 ]; then
-        echo "FAIL: Expected count 1 with block_ipv6, got $count_v6"
+    if [ "$count_v6" -ne 4 ]; then
+        echo "FAIL: Expected 4 domains with block_ipv6, got $count_v6"
         return 1
     fi
     grep -q "^filter-AAAA$" "$output_conf" || { echo "FAIL: filter-AAAA missing from config"; return 1; }
@@ -82,9 +86,50 @@ test_build_dnsmasq_config(){
     return 0
 }
 
-# --- Test 3: deferred dnsmasq restart ---
+# --- Test 3: selected GeoIP services ---
+test_downloads_selected_geoip_services(){
+    echo "Running Test 3: download_all_geo uses selected GeoIP services..."
+
+    local downloaded="$TEMP_DIR/downloaded_geoip"
+    GEO_DIR="$TEMP_DIR/geo"
+    MOCK_GEOIP_SERVICES="telegram,github"
+    rm -rf "$GEO_DIR"
+    : > "$downloaded"
+
+    download_geoip_service(){
+        echo "$1" >> "$downloaded"
+    }
+    curl(){
+        local output=""
+        while [ $# -gt 0 ]; do
+            [ "$1" = "-o" ] && { output="$2"; break; }
+            shift
+        done
+        [ -n "$output" ] && printf 'lists:\n' > "$output"
+    }
+
+    download_all_geo
+
+    [ "$(cat "$downloaded")" = "$(printf 'telegram\ngithub')" ] || {
+        echo "FAIL: download_all_geo ignored awg_geo_v2fly_ip"
+        return 1
+    }
+
+    MOCK_GEOIP_SERVICES="@@@"
+    : > "$downloaded"
+    download_all_geo
+    [ "$(cat "$downloaded")" = "$(printf 'telegram\ngoogle\nfacebook\ntwitter\nnetflix\ncloudflare\nfastly\ncloudfront')" ] || {
+        echo "FAIL: invalid GeoIP selection did not use defaults"
+        return 1
+    }
+
+    echo "PASS: download_all_geo uses selected GeoIP services"
+    return 0
+}
+
+# --- Test 4: deferred dnsmasq restart ---
 test_dnsmasq_restart_waits_for_rc_idle(){
-    echo "Running Test 3: deferred dnsmasq restart..."
+    echo "Running Test 4: deferred dnsmasq restart..."
 
     DNSMASQ_ACTIVE_CONF="$TEMP_DIR/dnsmasq_active.conf"
     local rc_busy="$TEMP_DIR/rc_busy"
@@ -128,9 +173,9 @@ test_dnsmasq_restart_waits_for_rc_idle(){
     return 0
 }
 
-# --- Test 4: skip stop reload during restart ---
+# --- Test 5: skip stop reload during restart ---
 test_stop_dnsmasq_restart_can_be_skipped(){
-    echo "Running Test 4: skip stop dnsmasq restart..."
+    echo "Running Test 5: skip stop dnsmasq restart..."
 
     local restart_requested="$TEMP_DIR/stop_restart_requested"
     service(){
@@ -152,6 +197,7 @@ test_stop_dnsmasq_restart_can_be_skipped(){
 # Run tests
 test_extract_v2fly_domains || exit 1
 test_build_dnsmasq_config || exit 1
+test_downloads_selected_geoip_services || exit 1
 test_dnsmasq_restart_waits_for_rc_idle || exit 1
 test_stop_dnsmasq_restart_can_be_skipped || exit 1
 
