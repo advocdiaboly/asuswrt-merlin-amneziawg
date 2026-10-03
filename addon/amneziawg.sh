@@ -888,6 +888,23 @@ do_start(){
 
     acquire_lock || { log_msg "ERROR: Cannot acquire lock, aborting start"; update_status; return 1; }
 
+    # Strict overcommit at the firmware default leaves too little commit budget
+    # for Go's startup allocations on 512MB ARMv7 routers.
+    local _mem_total _overcommit_ratio
+    _mem_total=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
+    _overcommit_ratio=$(cat /proc/sys/vm/overcommit_ratio 2>/dev/null)
+    if [ "$(uname -m)" = "armv7l" ] && \
+       [ -n "$_mem_total" ] && [ "$_mem_total" -le 524288 ] 2>/dev/null && \
+       [ "$(cat /proc/sys/vm/overcommit_memory 2>/dev/null)" = "2" ] && \
+       [ -n "$_overcommit_ratio" ] && [ "$_overcommit_ratio" -lt 60 ] 2>/dev/null; then
+        echo 60 > /proc/sys/vm/overcommit_ratio 2>/dev/null || {
+            log_msg "ERROR: Cannot raise vm.overcommit_ratio for low-memory ARMv7"
+            release_lock
+            return 1
+        }
+        log_msg "Raised vm.overcommit_ratio from $_overcommit_ratio to 60 for low-memory ARMv7"
+    fi
+
     # Ensure no stale daemon is running (even if interface is missing)
     if pidof amneziawg-go >/dev/null 2>&1; then
         log_msg "WARNING: amneziawg-go already running without interface, cleaning up..."
