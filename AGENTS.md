@@ -1,6 +1,6 @@
-# GEMINI.md
+# AGENTS.md
 
-This file provides guidance to Gemini CLI when working with code in this repository.
+This file provides guidance to coding agents working in this repository.
 
 ## Project Overview
 
@@ -68,7 +68,7 @@ Low-RAM routers (512MB) require specific tuning:
   - **Graceful Stop:** `do_stop` attempts to kill the daemon *before* deleting the interface, ensuring a clean state transition and allowing the daemon to shut down naturally. It uses a 5-second wait with a `kill -9` fallback.
 - **Connectivity Monitoring:** The health check loop logs its progress and failure reasons to aid in diagnosing endpoint reachability or obfuscation parameter issues.
 
-### Debugging Findings (May 2026 Investigation)
+### Debugging Findings (May & June 2026 Investigation)
 
 - **32-bit Junk Packet Bug:** Identified that `amneziawg-go` versions prior to **v0.2.18** have a critical math bug on 32-bit (armv7l) architectures, causing the daemon to crash during junk packet processing. **v0.2.18 is required for RT-AX5400.**
 - **Log Truncation & Persistence:** Identified that `/tmp/awg_daemon.log` was frequently overwritten using the `>` redirection in `do_start`. Append mode (`>>`) is now used to preserve crash history.
@@ -78,6 +78,9 @@ Low-RAM routers (512MB) require specific tuning:
   - **Redefinitions:** `skb_queue_empty_lockless` must be patched in the AmneziaWG compat layer to avoid redefinition errors with vendor kernels.
   - **Macro Identifiers:** compiler macros (like `BUILD_NAME`) cannot contain hyphens; use `RT_AX5400`.
 - **"Split-Brain" Process State:** Discovered scenarios where the `awg0` interface disappears while the `amneziawg-go` process remains active. The watchdog now checks for both.
+- **Dnsmasq Service-Event Race Conditions:** Identified that sometimes `service restart_dnsmasq` fails to properly rebuild `/tmp/etc/dnsmasq.conf` with `/jffs/configs/dnsmasq.conf.add` inclusions on router startup or quick reload sequences due to rate-limiting/concurrency limits in Merlin's service queue. Triggering a manual, synchronous `service restart_dnsmasq` solves the missing include issue and allows domain-based ipset routing to start functioning.
+- **GeoSite Regex Restrictions (e.g. Azure Web PubSub for ChatGPT):** Noted that the v2fly GeoSite database defines rules using `regexp:` for certain domains (like ChatGPT's websocket `chatgpt-async-webps-prod-...webpubsub.azure.com`). Since `amneziawg.sh`'s `extract_v2fly_domains` function only parses `domain:` and `full:` patterns, regex-defined subdomains are skipped. Users must manually add root domains (e.g. `webpubsub.azure.com`) to the **Custom geo domains** list in the UI to ensure websocket streaming connections route properly via VPN.
+
 
 ### Testing & Quality Assurance
 
